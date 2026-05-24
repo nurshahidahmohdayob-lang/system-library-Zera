@@ -7,6 +7,7 @@ import {
   doc, 
   updateDoc, 
   addDoc, 
+  deleteDoc,
   serverTimestamp,
   orderBy,
   limit
@@ -298,6 +299,26 @@ export const StudentSync: React.FC = () => {
         return () => clearTimeout(timer);
       }
     }
+
+    // Passive clean up of mock student accounts having 'ST-' prefix
+    const cleanupMockStudents = async () => {
+      try {
+        const q = query(collection(db, 'users'), where('role', '==', 'student'));
+        const snap = await getDocs(q);
+        const toDeleteDocs = snap.docs.filter(doc => {
+          const val = doc.data();
+          return val.studentId && typeof val.studentId === 'string' && val.studentId.startsWith('ST-');
+        });
+        
+        for (const docSnapshot of toDeleteDocs) {
+          console.log(`[Mock Cleanup] Removing mock student record ${docSnapshot.id} (${docSnapshot.data().name})`);
+          await deleteDoc(docSnapshot.ref);
+        }
+      } catch (err) {
+        console.warn("[Mock Cleanup] Non-critical background cleanup task skipped/failed:", err);
+      }
+    };
+    cleanupMockStudents();
   }, []);
 
   const saveSettings = () => {
