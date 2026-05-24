@@ -1,18 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Globe, 
   ExternalLink, 
   Search, 
   BookOpen, 
-  GraduationCap, 
-  Library as LibraryIcon,
+  Languages,
   Flame,
   Star,
-  Gamepad2,
+  Database,
   HelpCircle,
-  Code,
-  Palette,
-  ClipboardList
+  Gamepad2,
+  Award,
+  GraduationCap
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 
@@ -21,168 +20,234 @@ interface Resource {
   title: string;
   description: string;
   url: string;
-  category: string;
-  audience: 'Teacher' | 'Primary' | 'Secondary' | 'All';
+  category: 'E-Books' | 'Databases & Research' | 'Quiz Platforms' | 'Interactive Games' | 'Assessment Tools' | 'Subject Learning';
+  audience: 'Primary' | 'Secondary' | 'All';
+  language: 'English' | 'Chinese / Mandarin' | 'Bahasa Melayu';
   trending?: boolean;
-  subject?: string;
   recommended?: boolean;
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  'Interactive Games': <Gamepad2 className="w-4 h-4" />,
-  'Quiz Platforms': <HelpCircle className="w-4 h-4" />,
   'E-Books': <BookOpen className="w-4 h-4" />,
+  'Databases & Research': <Database className="w-4 h-4" />,
+  'Quiz Platforms': <HelpCircle className="w-4 h-4" />,
+  'Interactive Games': <Gamepad2 className="w-4 h-4" />,
+  'Assessment Tools': <Award className="w-4 h-4" />,
   'Subject Learning': <GraduationCap className="w-4 h-4" />,
-  'Coding & STEM': <Code className="w-4 h-4" />,
-  'Databases': <LibraryIcon className="w-4 h-4" />,
-  'Creativity': <Palette className="w-4 h-4" />,
-  'Teacher Tools': <ClipboardList className="w-4 h-4" />,
 };
 
 export const OnlineResources: React.FC = () => {
-  const [activeAudience, setActiveAudience] = useState<'All' | 'Teacher' | 'Primary' | 'Secondary'>('All');
+  const [activeAudience, setActiveAudience] = useState<'All' | 'Primary' | 'Secondary'>('All');
   const [searchTerm, setSearchTerm] = useState('');
+  const [activeLanguage, setActiveLanguage] = useState<'All' | 'English' | 'Chinese / Mandarin' | 'Bahasa Melayu'>('All');
   const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 12;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeAudience, searchTerm, activeLanguage, activeCategory]);
 
   const resources: Resource[] = [
-    // --- E-Books & Reading ---
-    { id: '1', title: 'Oxford Owl', description: 'Free eBook library for primary students with fun activities.', url: 'https://www.oxfordowl.co.uk/', category: 'E-Books', audience: 'Primary', trending: true, recommended: true },
-    { id: '2', title: 'Open Library', description: 'Millions of books available to read online or borrow.', url: 'https://openlibrary.org/', category: 'E-Books', audience: 'Secondary', trending: true },
-    { id: 'pg-9', title: 'Project Gutenberg', description: 'Over 60,000 free eBooks, mostly older literary works.', url: 'https://www.gutenberg.org/', category: 'E-Books', audience: 'Secondary' },
-    { id: '10', title: 'Storyline Online', description: 'Children’s literacy website that streams videos with celebrities reading books.', url: 'https://storylineonline.net/', category: 'E-Books', audience: 'Primary' },
-    { id: '11', title: 'Epic!', description: 'Leading digital reading platform for kids 12 and under.', url: 'https://www.getepic.com/', category: 'E-Books', audience: 'Primary', recommended: true },
-    { id: '12', title: 'LibriVox', description: 'Free public domain audiobooks read by volunteers.', url: 'https://librivox.org/', category: 'E-Books', audience: 'All' },
-    { id: '13', title: 'Standard Ebooks', description: 'High-quality, free, and public domain ebooks.', url: 'https://standardebooks.org/', category: 'E-Books', audience: 'Secondary' },
-    { id: '14', title: 'ManyBooks', description: 'Browse through a selection of the best free eBooks.', url: 'https://manybooks.net/', category: 'E-Books', audience: 'Secondary' },
-    { id: '15', title: 'BookTrust', description: 'UK reading charity providing interactive books and games.', url: 'https://www.booktrust.org.uk/', category: 'E-Books', audience: 'Primary' },
-
-    // --- Subject Learning ---
-    { id: '4', title: 'Khan Academy', description: 'Personalized learning resource for all ages, specialized in Math and Science.', url: 'https://www.khanacademy.org/', category: 'Subject Learning', audience: 'All', trending: true },
-    { id: '5', title: 'Nat Geo Kids', description: 'Science, history, and animal facts for young explorers.', url: 'https://kids.nationalgeographic.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '16', title: 'BBC Bitesize', description: 'Support for students in all school subjects across various levels.', url: 'https://www.bbc.co.uk/bitesize', category: 'Subject Learning', audience: 'All', recommended: true },
-    { id: '17', title: 'BrainPOP', description: 'Animated educational site for kids - science, social studies, math, health, and more.', url: 'https://www.brainpop.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '18', title: 'CK-12 Foundation', description: 'High-quality, customizable open education resources.', url: 'https://www.ck12.org/student/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '19', title: 'Smithsonian Learning Lab', description: 'Access to Smithsonian archives for research and teaching.', url: 'https://learninglab.si.edu/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '20', title: 'Math Is Fun', description: 'Simple explanations and games for mathematical concepts.', url: 'https://www.mathsisfun.com/', category: 'Subject Learning', audience: 'All' },
-    { id: '21', title: 'History.com', description: 'Rich repository of articles, videos, and facts about world history.', url: 'https://www.history.com/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '22', title: 'Wolfram Alpha', description: 'Computational intelligence engine for complex math and science.', url: 'https://www.wolframalpha.com/', category: 'Subject Learning', audience: 'Secondary', recommended: true },
-    { id: '23', title: 'Bill Nye the Science Guy', description: 'Home of the Science Guy with experiments and educational videos.', url: 'https://www.billnye.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '24', title: 'Duolingo', description: 'The world\'s most popular language learning app.', url: 'https://www.duolingo.com/', category: 'Subject Learning', audience: 'All', trending: true },
-
-    // --- Coding & STEM ---
-    { id: '7', title: 'Code.org', description: 'Empowering students to learn computer science and the Hour of Code.', url: 'https://code.org/', category: 'Coding & STEM', audience: 'All', recommended: true },
-    { id: '25', title: 'Scratch', description: 'Create stories, games, and animations. Share with others around the world.', url: 'https://scratch.mit.edu/', category: 'Coding & STEM', audience: 'Primary', recommended: true },
-    { id: '26', title: 'W3Schools', description: 'Comprehensive tutorials on web development and programming.', url: 'https://www.w3schools.com/', category: 'Coding & STEM', audience: 'Secondary' },
-    { id: '27', title: 'FreeCodeCamp', description: 'Learn to code for free and earn certifications.', url: 'https://www.freecodecamp.org/', category: 'Coding & STEM', audience: 'Secondary' },
-    { id: '28', title: 'NASA Kids\' Club', description: 'Games and activities for kids to learn about space and NASA.', url: 'https://www.nasa.gov/kidsclub/index.html', category: 'Coding & STEM', audience: 'Primary' },
-    { id: '29', title: 'Tynker', description: 'The fun way for kids to learn block-based and text coding.', url: 'https://www.tynker.com/', category: 'Coding & STEM', audience: 'Primary' },
-    { id: '30', title: 'Arduino Education', description: 'Resources for STEAM learning through physical computing.', url: 'https://www.arduino.cc/en/Education', category: 'Coding & STEM', audience: 'Secondary' },
-    { id: '31', title: 'NASA STEM', description: 'Educational resources from NASA for students and educators.', url: 'https://www.nasa.gov/stem', category: 'Coding & STEM', audience: 'All' },
-    { id: '32', title: 'HowStuffWorks', description: 'Explanation of how the world really works through science and tech.', url: 'https://www.howstuffworks.com/', category: 'Coding & STEM', audience: 'Secondary' },
+    // ==========================================
+    // --- English Level Resources ---
+    // ==========================================
+    
+    // --- E-Books ---
+    { id: 'oxford-owl', title: 'Oxford Owl e-Library', description: 'A free, tablet-friendly digital reading library from Oxford University Press designed to build core literacy skills in young primary school students.', url: 'https://www.oxfordowl.co.uk/for-home/find-a-book/library-page/', category: 'E-Books', audience: 'Primary', language: 'English', trending: true, recommended: true },
+    { id: 'epic-books', title: 'Epic! School Library', description: 'The premier digital reading service for primary students, providing instant access to thousands of high-quality illustrated children\'s books and educational stories.', url: 'https://www.getepic.com/', category: 'E-Books', audience: 'Primary', language: 'English', recommended: true },
+    { id: 'storyline-online', title: 'Storyline Online', description: 'An award-winning English literary platform streaming premium video storybooks narrated by celebrated actors to boost literacy and pronunciation.', url: 'https://storylineonline.net/', category: 'E-Books', audience: 'Primary', language: 'English' },
+    { id: 'k12-openlibrary', title: 'K-12 Open Library', description: 'A colossal repository of classic school novels, curated standard literature, and public domain materials safe for secondary school classroom reading.', url: 'https://openlibrary.org/', category: 'E-Books', audience: 'Secondary', language: 'English', trending: true },
+    { id: 'gutenberg-youth', title: 'Project Gutenberg (Youth)', description: 'More than 60,000 public domain classical literature creations, anthologies, and historical pieces ideal for secondary research and literature studies.', url: 'https://www.gutenberg.org/wiki/Children%27s_Literature_(Bookshelf)', category: 'E-Books', audience: 'Secondary', language: 'English' },
+    { id: 'unite-for-literacy', title: 'Unite for Literacy Library', description: 'Dozens of beautifully photographed, easy-to-read nonfiction e-books designed to build vocabulary in primary emergent readers with multilingual audio supports.', url: 'https://www.uniteforliteracy.com/', category: 'E-Books', audience: 'Primary', language: 'English' },
+    { id: 'follett-lightspeed', title: 'Follett Destiny Discover', description: 'Educational reading search gateway designed for schools, offering interactive books, audiobooks, and textbook chapters for kindergarten through secondary students.', url: 'https://www.follettlearning.com/', category: 'E-Books', audience: 'All', language: 'English' },
+    { id: 'vooks-storybooks', title: 'Vooks Animated Audiobooks', description: 'Polished animated children\'s storybooks that add slow-paced, non-distracting screen movement and highlighted text to build word association to primary readers.', url: 'https://www.vooks.com/', category: 'E-Books', audience: 'Primary', language: 'English' },
 
     // --- Databases & Research ---
-    { id: '3', title: 'Google Scholar', description: 'Search across a wide variety of disciplines and sources.', url: 'https://scholar.google.com/', category: 'Databases', audience: 'Secondary' },
-    { id: '6', title: 'ERIC', description: 'Comprehensive library of education research and information.', url: 'https://eric.ed.gov/', category: 'Databases', audience: 'Teacher' },
-    { id: '33', title: 'JSTOR', description: 'Digital library of academic journals, books, and primary sources.', url: 'https://www.jstor.org/', category: 'Databases', audience: 'Secondary', recommended: true },
-    { id: '34', title: 'PubMed', description: 'Free search engine accessing primarily the MEDLINE database.', url: 'https://pubmed.ncbi.nlm.nih.gov/', category: 'Databases', audience: 'Secondary' },
-    { id: '35', title: 'Directory of Open Access Journals', description: 'Community-curated online directory that indexes open access journals.', url: 'https://doaj.org/', category: 'Databases', audience: 'Secondary' },
-    { id: '36', title: 'Library of Congress', description: 'The largest library in the world with millions of books, recordings, and more.', url: 'https://www.loc.gov/', category: 'Databases', audience: 'All' },
-    { id: '37', title: 'World Digital Library', description: 'Significant primary materials from countries and cultures around the world.', url: 'https://www.wdl.org/en/', category: 'Databases', audience: 'All' },
+    { id: 'britannica-school', title: 'Britannica School Kids', description: 'A highly secure, student-safe electronic encyclopedia and historical reference directory with structured content for primary and middle school research projects.', url: 'https://www.britannica.com/', category: 'Databases & Research', audience: 'Primary', language: 'English', recommended: true },
+    { id: 'google-scholar-sec', title: 'Google Scholar Research Gateway', description: 'Vast intellectual repository index suitable for secondary school students conducting complex essays, science fair projects, and citation reports.', url: 'https://scholar.google.com/', category: 'Databases & Research', audience: 'Secondary', language: 'English' },
+    { id: 'nasa-kids-club', title: 'NASA Kids\' Club Science Portal', description: 'An interactive database of space observations, spacecraft telemetry, astronaut diaries, and astronomical image databases adjusted for school comprehension and class projects.', url: 'https://www.nasa.gov/learning-resources/nasa-kids-club/', category: 'Databases & Research', audience: 'Primary', language: 'English', recommended: true },
+    { id: 'natgeo-kids', title: 'National Geographic Kids Explorer', description: 'Exploration database presenting wildlife records, geographical maps, archaeology projects, and natural science databases suitable for primary school investigations.', url: 'https://kids.nationalgeographic.com/', category: 'Databases & Research', audience: 'Primary', language: 'English', trending: true },
+    { id: 'world-book-online', title: 'World Book Student Portal', description: 'Rich reference collection supplying primary and high school students with primary sources, interactive maps, comparative statistics, and peer-reviewed educational articles.', url: 'https://www.worldbookonline.com/', category: 'Databases & Research', audience: 'All', language: 'English' },
+    { id: 'sweetsearch-edu', title: 'SweetSearch Student Search', description: 'A search engine for students that searches only high-quality, pre-screened websites evaluated by educators and librarians to fast-track research projects.', url: 'https://www.sweetsearch.com/', category: 'Databases & Research', audience: 'Secondary', language: 'English' },
+    { id: 'smithsonian-learning', title: 'Smithsonian Learning Lab', description: 'Millions of safe digital artifacts, historical archive collections, scientific datasets, and interactive exhibits curated for classroom assignments.', url: 'https://learninglab.si.edu/', category: 'Databases & Research', audience: 'Secondary', language: 'English' },
+    { id: 'sweet-water-database', title: 'USGS Water Science Directory', description: 'Rich water research database displaying water quality reports, cycle maps, and atmospheric datasets ideal for secondary school geography and earth sciences.', url: 'https://www.usgs.gov/special-topics/water-science-school', category: 'Databases & Research', audience: 'Secondary', language: 'English' },
 
-    // --- Quiz & Interactive ---
-    { id: '9', title: 'Kahoot!', description: 'Make learning awesome through engaging game-based quizzes.', url: 'https://kahoot.com/', category: 'Quiz Platforms', audience: 'All', trending: true },
-    { id: '38', title: 'Quizizz', description: 'Free self-paced quizzes to motivate every student.', url: 'https://quizizz.com/', category: 'Quiz Platforms', audience: 'All' },
-    { id: '39', title: 'Quizlet', description: 'Learning tools and flashcards for any subject, for all levels.', url: 'https://quizlet.com/', category: 'Quiz Platforms', audience: 'All', recommended: true },
-    { id: '40', title: 'Educandy', description: 'Make learning sweet by creating interactive games.', url: 'https://www.educandy.com/', category: 'Quiz Platforms', audience: 'Primary' },
-    { id: '41', title: 'Gimkit', description: 'A game show for the classroom that students play live.', url: 'https://www.gimkit.com/', category: 'Quiz Platforms', audience: 'All' },
-    { id: '42', title: 'Blooket', description: 'A new take on trivia and review games.', url: 'https://www.blooket.com/', category: 'Quiz Platforms', audience: 'All', trending: true },
+    // --- Quiz Platforms ---
+    { id: 'quizizz-edu', title: 'Quizizz Educational Live Quizzes', description: 'Interactive classroom quizzes and trivia games aligned with primary and secondary learning checkins, self-paced tests, and vocabulary activities.', url: 'https://quizizz.com/', category: 'Quiz Platforms', audience: 'All', language: 'English', trending: true },
+    { id: 'kahoot-learning', title: 'Kahoot! Play and Learn', description: 'A stellar interactive classroom quiz engine supporting real-time group collaboration, competitive quizzes, and friendly spelling check-ins.', url: 'https://kahoot.com/', category: 'Quiz Platforms', audience: 'All', language: 'English' },
+    { id: 'gimkit-live', title: 'Gimkit Class Game Shows', description: 'An interactive live-quiz system designed by a high school student where academic performance allows players to earn virtual currency to purchase power-ups.', url: 'https://www.gimkit.com/', category: 'Quiz Platforms', audience: 'All', language: 'English', recommended: true },
+    { id: 'blooket-play', title: 'Blooket Interactive Trivia', description: 'Action-oriented quiz system where students answer quick revision questions to progress in real-time tower-defense, tycoon, or strategy mini-games.', url: 'https://www.blooket.com/', category: 'Quiz Platforms', audience: 'All', language: 'English', trending: true },
+    { id: 'nearpod-interactive', title: 'Nearpod Interactive Presentations', description: 'Allows teachers to present active slides featuring built-in matching pairs, polling questions, 3D orbits, and open-ended student quick-quizzes.', url: 'https://nearpod.com/', category: 'Quiz Platforms', audience: 'All', language: 'English' },
+    { id: 'mentimeter-edu', title: 'Mentimeter Class Polls', description: 'Active student polling portal, word cloud builder, and interactive quiz system designed to capture live class responses and test reading comprehension.', url: 'https://www.mentimeter.com/', category: 'Quiz Platforms', audience: 'Secondary', language: 'English' },
+    { id: 'classtools-net', title: 'ClassTools Arcade & Tools', description: 'Enables creation of custom student quizzes, timeline generators, fake text generators, and retro arcade-style review activities for studying history.', url: 'https://www.classtools.net/', category: 'Quiz Platforms', audience: 'All', language: 'English' },
 
-    // --- Creativity & Design ---
-    { id: '8', title: 'Canva Education', description: 'Empower every student and teacher to design and create.', url: 'https://www.canva.com/education/', category: 'Creativity', audience: 'All' },
-    { id: '43', title: 'Behance', description: 'The world\'s largest creative network for showcasing creative work.', url: 'https://www.behance.net/', category: 'Creativity', audience: 'Secondary' },
-    { id: '44', title: 'Adobe Express', description: 'Create professional graphics, videos, and web pages.', url: 'https://www.adobe.com/express/', category: 'Creativity', audience: 'Secondary' },
-    { id: '45', title: 'Pixlr', description: 'Free online photo editor and design tools.', url: 'https://pixlr.com/', category: 'Creativity', audience: 'Secondary' },
-    { id: '46', title: 'Tinkercad', description: 'Free, easy-to-use app for 3D design, electronics, and coding.', url: 'https://www.tinkercad.com/', category: 'Creativity', audience: 'All', recommended: true },
-    { id: '47', title: 'Artsology', description: 'Art games for kids and educational resources.', url: 'https://artsology.com/', category: 'Creativity', audience: 'Primary' },
-    { id: '48', title: 'Tate Kids', description: 'Art history, games, and quizzes from the Tate galleries.', url: 'https://www.tate.org.uk/kids', category: 'Creativity', audience: 'Primary' },
+    // --- Interactive Games ---
+    { id: 'abcya-games', title: 'ABCya Educational Games', description: 'Hundreds of interactive, colorful literacy and numbers-oriented games for primary grade students to build logic in a safe, play-first environment.', url: 'https://www.abcya.com/', category: 'Interactive Games', audience: 'Primary', language: 'English', recommended: true },
+    { id: 'scratch-creative', title: 'Scratch Coding Community', description: 'Create interactive animations, visual blocks and logic-driven retro games designed by MIT to safely teach students computer science principles.', url: 'https://scratch.mit.edu/', category: 'Interactive Games', audience: 'All', language: 'English' },
+    { id: 'pbs-kids-games', title: 'PBS KIDS Educational Games', description: 'Wholesome learning games featuring popular children\'s characters that reinforce primary literacy, numeracy, and cooperative skills.', url: 'https://pbskids.org/games/', category: 'Interactive Games', audience: 'Primary', language: 'English' },
+    { id: 'math-playground', title: 'Math Playground', description: 'Fun geometry, fractions, and algebra logical training exercises presented as engaging puzzle games and speed-challenges for elementary grades.', url: 'https://www.mathplayground.com/', category: 'Interactive Games', audience: 'Primary', language: 'English' },
+    { id: 'prodigy-math', title: 'Prodigy Math Fantasy Adventure', description: 'Explore a rich fantasy adventure world where casting spells and moving forward in quests requires solving level-aligned math equations.', url: 'https://www.prodigygame.com/', category: 'Interactive Games', audience: 'Primary', language: 'English', trending: true },
+    { id: 'coolmath-games', title: 'Coolmath Games Logic Lab', description: 'Engaging, physics-based grid puzzles, strategy boards, and spatial reasoning games loved by intermediate and high school students.', url: 'https://www.coolmathgames.com/', category: 'Interactive Games', audience: 'Secondary', language: 'English' },
+    { id: 'typing-club', title: 'TypingClub Keyboard Trainer', description: 'Gamified touch-typing course teaching hand positioning, finger-muscle memory, and layout speed through interactive reward levels.', url: 'https://www.typingclub.com/', category: 'Interactive Games', audience: 'All', language: 'English', recommended: true },
+    { id: 'funbrain-learning', title: 'Funbrain Grade-School Arcade', description: 'Interactive learning books and mathematics games that build academic problem-solving skills in primary and middle school students.', url: 'https://www.funbrain.com/', category: 'Interactive Games', audience: 'Primary', language: 'English' },
 
-    // --- Teacher Tools ---
-    { id: '49', title: 'TES Resources', description: 'Huge collection of teaching materials made by teachers.', url: 'https://www.tes.com/teaching-resources', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '50', title: 'Teachers Pay Teachers', description: 'Marketplace for original educational resources.', url: 'https://www.teacherspayteachers.com/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '51', title: 'Edutopia', description: 'Inspiration and evidence-based strategies for K-12 education.', url: 'https://www.edutopia.org/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '52', title: 'ClassDojo', description: 'Build a wonderful classroom community with students and parents.', url: 'https://www.classdojo.com/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '53', title: 'Padlet', description: 'Collaboration software that helps you create beautiful boards.', url: 'https://padlet.com/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '54', title: 'Twinkl', description: 'Instant access to over 600,000 teacher-made resources.', url: 'https://www.twinkl.com/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '55', title: 'Nearpod', description: 'Interactive lessons, videos, and formative assessments.', url: 'https://nearpod.com/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '56', title: 'Pear Deck', description: 'Active learning and feedback for every student in your classroom.', url: 'https://www.peardeck.com/', category: 'Teacher Tools', audience: 'Teacher' },
+    // --- Assessment Tools ---
+    { id: 'quizlet-study', title: 'Quizlet Active Recall Flashcard Deck', description: 'Powerful student-configured check-ins, study cards, mock tests, and memorization exercises supporting standard secondary school biology, history, and chemistry revisions.', url: 'https://quizlet.com/', category: 'Assessment Tools', audience: 'Secondary', language: 'English', trending: true },
+    { id: 'socrative-check', title: 'Socrative Student-In Assessment', description: 'Instant student performance check-ins, custom quizzes, exit-slips, and dynamic classroom feedback modules for educational progress reports.', url: 'https://www.socrative.com/', category: 'Assessment Tools', audience: 'All', language: 'English' },
+    { id: 'flippity-templates', title: 'Flippity Google Sheet Activities', description: 'Converts simple spreadsheet inputs into interactive flashcards, jeopardy-style boards, badge trackers, and virtual escape rooms.', url: 'https://www.flippity.net/', category: 'Assessment Tools', audience: 'Secondary', language: 'English' },
+    { id: 'edpuzzle-video', title: 'Edpuzzle Video Assessments', description: 'Enables insertion of short audio comments, open-ended comprehension questions, and multiple-choice checkpoints directly into movie clips or document lessons.', url: 'https://edpuzzle.com/', category: 'Assessment Tools', audience: 'Secondary', language: 'English', recommended: true },
+    { id: 'formative-assessment', title: 'Formative (GoFormative) Tracker', description: 'Real-time assessment platform supplying teachers with instant student typing inputs, drawing boards, and written arguments to adapt lessons.', url: 'https://www.formative.com/', category: 'Assessment Tools', audience: 'Secondary', language: 'English' },
+    { id: 'padlet-collaboration', title: 'Padlet Digital Pinboards', description: 'Collaborative bulletin wall where students pin research links, photos, short essays, and presentation files for easy peer-assessment.', url: 'https://padlet.com/', category: 'Assessment Tools', audience: 'All', language: 'English' },
+    { id: 'plickers-cards', title: 'Plickers Paperless Evaluation', description: 'Enables instant feedback evaluations where students hold up barcode-style cardboard cards, instantly scanned by a teacher\'s phone camera.', url: 'https://www.plickers.com/', category: 'Assessment Tools', audience: 'Primary', language: 'English' },
 
-    // --- Additional Knowledge ---
-    { id: '57', title: 'Ted-Ed', description: 'Lessons worth sharing from great educators around the world.', url: 'https://ed.ted.com/', category: 'Subject Learning', audience: 'All', trending: true },
-    { id: '58', title: 'Coursera', description: 'Free online courses from top universities.', url: 'https://www.coursera.org/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '59', title: 'edX', description: 'Access 2000+ free online courses from 140 leading institutions.', url: 'https://www.edx.org/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '60', title: 'BrainyQuote', description: 'The world\'s largest quotation site.', url: 'https://www.brainyquote.com/', category: 'E-Books', audience: 'All' },
-    { id: '61', title: 'FactCheck.org', description: 'Nonpartisan monitor of the accuracy of political claims.', url: 'https://www.factcheck.org/', category: 'Databases', audience: 'Secondary' },
-    { id: '62', title: 'Ancient History Encyclopedia', description: 'Non-profit organization for ancient history education.', url: 'https://www.ancient.eu/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '63', title: 'CIA World Factbook', description: 'Information on the history, people, and society of world nations.', url: 'https://www.cia.gov/the-world-factbook/', category: 'Databases', audience: 'Secondary' },
-    { id: '64', title: 'Space.com', description: 'The latest space exploration, innovation, and astronomy news.', url: 'https://www.space.com/', category: 'Coding & STEM', audience: 'All' },
-    { id: '65', title: 'Science News for Students', description: 'Current events in science for ages 9 and up.', url: 'https://www.sciencenewsforstudents.org/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '66', title: 'BioDigital Human', description: '3D platform for visualizing anatomy, disease and treatments.', url: 'https://www.biodigital.com/', category: 'Coding & STEM', audience: 'Secondary' },
-    { id: '67', title: 'Instructables', description: 'User-created DIY projects and educational guides.', url: 'https://www.instructables.com/', category: 'Creativity', audience: 'All' },
-    { id: '68', title: 'Open Culture', description: 'The best free cultural and educational media on the web.', url: 'https://www.openculture.com/', category: 'Databases', audience: 'Secondary' },
-    { id: '69', title: 'OER Commons', description: 'Public digital library of open educational resources.', url: 'https://www.oercommons.org/', category: 'Databases', audience: 'Teacher' },
-    { id: '70', title: 'Curriki', description: 'Open educational resources for K-12 learning.', url: 'https://www.curriki.org/', category: 'Databases', audience: 'Teacher' },
-    { id: '71', title: 'Merlot', description: 'Free and open online resources for higher education.', url: 'https://www.merlot.org/', category: 'Databases', audience: 'Secondary' },
-    { id: '72', title: 'OpenStax', description: 'Free, peer-reviewed, openly licensed textbooks.', url: 'https://openstax.org/', category: 'E-Books', audience: 'Secondary' },
-    { id: '73', title: 'The Metropolitan Museum of Art', description: 'Explore art and education from The Met.', url: 'https://www.metmuseum.org/', category: 'Creativity', audience: 'All' },
-    { id: '74', title: 'National Gallery of Art', description: 'Access art and education resources from NGA.', url: 'https://www.nga.gov/', category: 'Creativity', audience: 'All' },
-    { id: '75', title: 'Google Arts & Culture', description: 'Explore collections from around the world.', url: 'https://artsandculture.google.com/', category: 'Creativity', audience: 'All', recommended: true },
-    { id: '76', title: 'Biography.com', description: 'Official source for high-quality biographies.', url: 'https://www.biography.com/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '77', title: 'BBC History', description: 'World history, from ancient to modern.', url: 'https://www.bbc.co.uk/history', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '78', title: 'Math Games', description: 'Free math games and worksheets.', url: 'https://www.mathgames.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '79', title: 'Starfall', description: 'Learning to read with phonics - for primary students.', url: 'https://www.starfall.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '80', title: 'ABCya', description: 'Educational games for kids.', url: 'https://www.abcya.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '81', title: 'Funbrain', description: 'Educational games for kids of all ages.', url: 'https://www.funbrain.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '82', title: 'CoolMath4Kids', description: 'Math lessons and games for kids.', url: 'https://www.coolmath4kids.com/', category: 'Subject Learning', audience: 'Primary' },
-    { id: '83', title: 'Frontiers for Young Minds', description: 'Science for kids, edited by kids.', url: 'https://kids.frontiersin.org/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '84', title: 'Kids Activities Blog', description: 'Fun learning activities for young children.', url: 'https://kidsactivitiesblog.com/', category: 'Teacher Tools', audience: 'Primary' },
-    { id: '85', title: 'Scholastic Learn at Home', description: 'Educational resources for learning at home.', url: 'https://classroommagazines.scholastic.com/support/learnathome.html', category: 'Subject Learning', audience: 'All' },
-    { id: '86', title: 'Discovery Education', description: 'Experience the world in your classroom.', url: 'https://www.discoveryeducation.com/', category: 'Subject Learning', audience: 'All' },
-    { id: '87', title: 'PBS LearningMedia', description: 'Videos, interactives, and lesson plans for teachers.', url: 'https://www.pbslearningmedia.org/', category: 'Teacher Tools', audience: 'Teacher' },
-    { id: '88', title: 'National Archives', description: 'Primary sources for historical research.', url: 'https://www.archives.gov/', category: 'Databases', audience: 'Secondary' },
-    { id: '89', title: 'NYPL Digital Collections', description: 'Search and browse digitized items from NYPL.', url: 'https://digitalcollections.nypl.org/', category: 'Databases', audience: 'All' },
-    { id: '90', title: 'Europeana', description: 'Digitized cultural heritage from Europe.', url: 'https://www.europeana.eu/en', category: 'Databases', audience: 'All' },
-    { id: '91', title: 'Biodiversity Heritage Library', description: 'Open access digital library of biology and biodiversity.', url: 'https://www.biodiversitylibrary.org/', category: 'Databases', audience: 'Secondary' },
-    { id: '92', title: 'ArXiv', description: 'Open-access archive for 2 million scholarly articles.', url: 'https://arxiv.org/', category: 'Databases', audience: 'Secondary' },
-    { id: '93', title: 'ResearchGate', description: 'Social networking site for scientists and researchers.', url: 'https://www.researchgate.net/', category: 'Databases', audience: 'Secondary' },
-    { id: '94', title: 'Academia.edu', description: 'Platform for sharing academic research.', url: 'https://www.academia.edu/', category: 'Databases', audience: 'Secondary' },
-    { id: '95', title: 'Scribd', description: 'Digital document library and subscription for ebooks.', url: 'https://www.scribd.com/', category: 'E-Books', audience: 'All' },
-    { id: '96', title: 'Issuu', description: 'Digital discovery and publishing platform.', url: 'https://issuu.com/', category: 'E-Books', audience: 'All' },
-    { id: '97', title: 'Medium', description: 'The best place on the internet to read and write.', url: 'https://medium.com/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '98', title: 'Quora', description: 'A place to share knowledge and better understand the world.', url: 'https://www.quora.com/', category: 'Subject Learning', audience: 'Secondary' },
-    { id: '99', title: 'Lifehacker', description: 'Tips, tricks, and downloads for getting things done.', url: 'https://lifehacker.com/', category: 'Teacher Tools', audience: 'All' },
-    { id: '100', title: 'Mental Floss', description: 'Amazing facts and trivia about everything.', url: 'https://www.mentalfloss.com/', category: 'Subject Learning', audience: 'All' },
-    { id: '101', title: 'Wired', description: 'The latest in tech, science, and culture news.', url: 'https://www.wired.com/', category: 'Subject Learning', audience: 'Secondary' },
+    // --- Subject Learning ---
+    { id: 'khan-academy-global', title: 'Khan Academy Masterclasses', description: 'A completely free personalized dashboard allowing students to study Math, Chemistry, Biology, Physics, and history through step-by-step videos.', url: 'https://www.khanacademy.org/', category: 'Subject Learning', audience: 'All', language: 'English', recommended: true },
+    { id: 'bbc-bitesize-revision', title: 'BBC Bitesize Revision Guides', description: 'Interactive topic breakdowns, short informative videos, curriculum support, and safe revision worksheets across core school disciplines.', url: 'https://www.bbc.co.uk/bitesize', category: 'Subject Learning', audience: 'All', language: 'English', trending: true },
+    { id: 'ck12-foundation', title: 'CK-12 FlexBook Platform', description: 'Vast secondary school STEM library supplying customizable, standards-aligned free digital textbook modules with integrated simulations.', url: 'https://www.ck12.org/student/', category: 'Subject Learning', audience: 'Secondary', language: 'English', recommended: true },
+    { id: 'code-org-academy', title: 'Code.org Hour of Code', description: 'Introductory block coding activities, App Labs, and AI concepts tutorials designed to build secondary computational logic in a gamified way.', url: 'https://code.org/', category: 'Subject Learning', audience: 'All', language: 'English', trending: true },
+    { id: 'ted-ed-lessons', title: 'TED-Ed Animations & Lessons', description: 'Captivating short animations detailing scientific theories, major historical epochs, literary deep-dives, and complex mathematical riddles.', url: 'https://ed.ted.com/', category: 'Subject Learning', audience: 'Secondary', language: 'English' },
+    { id: 'geogebra-math', title: 'GeoGebra Dynamic Math Lab', description: 'Interactive geometry, algebra, 3D modeling curves, physics graphing, and dynamic calculus boards built for secondary students.', url: 'https://www.geogebra.org/', category: 'Subject Learning', audience: 'Secondary', language: 'English' },
+    { id: 'colorado-phet', title: 'PhET Interactive Simulations', description: 'University of Colorado Boulder\'s interactive physics, chemistry, thermodynamics, and math laboratory simulators suitable for high school coursework.', url: 'https://phet.colorado.edu/', category: 'Subject Learning', audience: 'Secondary', language: 'English', recommended: true },
+    { id: 'crash-course-kids', title: 'Crash Course Kids Science', description: 'Lively, fast-paced animated science show covering primary-grade chemistry, physical science, ecosystems, and space sciences.', url: 'https://www.youtube.com/user/crashcoursekids', category: 'Subject Learning', audience: 'Primary', language: 'English' },
+    { id: 'duolingo-languages', title: 'Duolingo Language Academy', description: 'Bite-sized, gamified language acquisition software that turns grammar rules, vocabularies, and listening practice into rewarding, streak-building quests.', url: 'https://www.duolingo.com/', category: 'Subject Learning', audience: 'All', language: 'English' },
+    { id: 'sci-show-kids', title: 'SciShow Kids Discovery Channel', description: 'Explores the complex questions kids ask through engaging video segments, scientific experiments, and animal encounters designed for primary grades.', url: 'https://www.youtube.com/c/scishowkids', category: 'Subject Learning', audience: 'Primary', language: 'English' },
+
+    // ==========================================
+    // --- Chinese / Mandarin Resources ---
+    // ==========================================
+    
+    // --- E-Books ---
+    { id: 'storybooks-china', title: 'Storybooks China (故事书中国)', description: 'Free, interactive children\'s storybooks with native speaker audio, custom Pinyin toggles, and English translation to build primary reading confidence.', url: 'https://storybooks-china.org/', category: 'E-Books', audience: 'Primary', language: 'Chinese / Mandarin', recommended: true },
+    { id: 'du-chinese', title: 'Du Chinese Graded Reader', description: 'High-quality digital graded Chinese reader service utilizing safe, interesting news snippets, fairy tales, and daily dialogues for primary and secondary language learners.', url: 'https://www.duchinese.net/', category: 'E-Books', audience: 'Secondary', language: 'Chinese / Mandarin', trending: true },
+    { id: 'soobic-library', title: 'Soobic Illustrated Chinese (书比故事)', description: 'Visually vibrant Chinese storybook repositories, short traditional myths, and basic flashcard vocabulary resources perfect for elementary schools.', url: 'https://www.soobic.com/', category: 'E-Books', audience: 'Primary', language: 'Chinese / Mandarin' },
+    { id: 'yes-chinese-ebooks', title: 'YesChinese Reading Bookshelf (中文阅读)', description: 'A structured digital bookshelf featuring classic Chinese fairytales, youth-oriented moral fables, and level-rated Mandarin readers with vocabulary hints.', url: 'https://www.yeschinese.com/', category: 'E-Books', audience: 'All', language: 'Chinese / Mandarin' },
+    { id: 'chinese-gutenberg-classics', title: 'Project Gutenberg (Chinese Classics)', description: 'Digitized copies of classic historical masterpieces, classical Chinese poetry, and literature pieces for advanced secondary school students.', url: 'https://www.gutenberg.org/browse/languages/zh', category: 'E-Books', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'hujiang-children-bm', title: 'HuJiang Kids Chinese Gateway (沪江少儿)', description: 'Popular Chinese kids literary portal offering classic story modules, rhymes, bedtime tales, and simplified level-readers for early Chinese learners.', url: 'https://saber.hujiang.com/', category: 'E-Books', audience: 'Primary', language: 'Chinese / Mandarin' },
+
+    // --- Databases & Research ---
+    { id: 'ctext-classical', title: 'Chinese Text Project (中国哲学书电子化计划)', description: 'A colossal, highly respected digital database of historical texts, classics, and translation tools for secondary students doing intermediate to advanced Chinese studies.', url: 'https://ctext.org/', category: 'Databases & Research', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'baidu-baike', title: 'Baidu Baike (百度百科)', description: 'A massive, highly granular Chinese-language collaborative online encyclopedia suitable for student research into Asian science, literature, and geography.', url: 'https://baike.baidu.com/', category: 'Databases & Research', audience: 'Secondary', language: 'Chinese / Mandarin', trending: true },
+    { id: 'sinica-digital', title: 'Academia Sinica Historical Portal', description: 'Traditional archives, historical archaeological excavations, and ancient calligraphy databases curated for high school historical coursework and research papers.', url: 'http://www.sinica.edu.tw/', category: 'Databases & Research', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'china-knowledge', title: 'ChinaKnowledge Reference Hub', description: 'An encyclopedia and reference database outlining traditional history, geography, arts, and key architectural elements of historical China.', url: 'http://www.chinaknowledge.de/', category: 'Databases & Research', audience: 'Secondary', language: 'Chinese / Mandarin' },
+
+    // --- Quiz & Assessment ---
+    { id: 'chinesetest-hsk', title: 'Official HSK Practice & Evaluation Portal', description: 'Excellent Chinese proficiency diagnostic assessments, self-testing, character identification modules, and vocabulary evaluations for secondary school students.', url: 'https://www.chinesetest.cn/', category: 'Assessment Tools', audience: 'Secondary', language: 'Chinese / Mandarin', recommended: true },
+    { id: 'clavis-sinica', title: 'Clavis Sinica Character Diagnostics', description: 'Innovative text analytics and diagnostic tools that allow intermediate and advanced Chinese scholars to test word-meaning and study character structure.', url: 'https://www.clavissinica.com/', category: 'Assessment Tools', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'arch-chinese', title: 'Arch Chinese Character Drills', description: 'Features custom stroke order validators, handwriting recognition checkers, and flashcard quizzes optimized for testing grade-school Chinese spelling.', url: 'https://www.archchinese.com/', category: 'Assessment Tools', audience: 'All', language: 'Chinese / Mandarin', trending: true },
+    { id: 'hsk-academy-test', title: 'HSK Academy Diagnostic Suite', description: 'A complete evaluation platform for secondary and high school students preparing for international HSK exams with timed grammar sets.', url: 'https://www.hskacademy.com/', category: 'Assessment Tools', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'chinese-quizlet-deck', title: 'Quizlet Chinese Character Packs', description: 'User-curated active recall study decks focusing on standard Chinese radicals, Pinyin rules, and everyday conversational Chinese vocabularies.', url: 'https://quizlet.com/subject/chinese/', category: 'Quiz Platforms', audience: 'All', language: 'Chinese / Mandarin' },
+    { id: 'kahoot-mandarin', title: 'Kahoot! Mandarin Vocab Arena', description: 'Real-time Chinese vocabulary match-ups, basic glyph identification challenges, and interactive multiplayer word quizzes designed for students.', url: 'https://kahoot.com/explore/chinese-learning/', category: 'Quiz Platforms', audience: 'All', language: 'Chinese / Mandarin' },
+
+    // --- Interactive Games ---
+    { id: 'chalk-academy-zh', title: 'Chalk Academy Chinese Playroom', description: 'Bilingual play-oriented character recognition activities, card pairing games, and digital puzzles suited for Chinese language learners in primary school.', url: 'https://chalkacademy.com/', category: 'Interactive Games', audience: 'Primary', language: 'Chinese / Mandarin' },
+    { id: 'maobi-writing-game', title: 'Maobi Interactive Stroke Order Game', description: 'Engaging character writing practice game teaching core stroke direction, balance, and pronunciation of Chinese glyphs through beautiful responsive visuals.', url: 'https://maobi.eu/', category: 'Interactive Games', audience: 'All', language: 'Chinese / Mandarin', trending: true },
+    { id: 'yes-chinese-games', title: 'YesChinese Language Games', description: 'An interactive arena containing memory cards, word finders, and stroke-direction puzzle games designed to make primary school Mandarin learning fun.', url: 'https://www.yeschinese.com/en/game/', category: 'Interactive Games', audience: 'Primary', language: 'Chinese / Mandarin', recommended: true },
+    { id: 'mandarin-games-edu', title: 'Chinese Games Online', description: 'Primary-level typing training games, spelling speed challenges, and interactive vocabulary boards that accelerate children\'s phonetic Pinyin recognition.', url: 'http://www.chinesegames.org/', category: 'Interactive Games', audience: 'Primary', language: 'Chinese / Mandarin' },
+
+    // --- Subject Learning ---
+    { id: 'lingoace-hub', title: 'LingoAce Kids Mandarin Hub', description: 'Immersive, visually rich curriculum structures, grammar logs, interactive slides, and culture-centric language lessons designed for young language scholars.', url: 'https://www.lingoace.com/', category: 'Subject Learning', audience: 'Primary', language: 'Chinese / Mandarin', recommended: true },
+    { id: 'little-fox-chinese', title: 'Little Fox Chinese Animated Academy', description: 'A treasure trove of highly engaging animated Chinese folktales, vocabulary songs, and progressive level-by-level conversational lessons for primary students.', url: 'https://chinese.littlefox.com/', category: 'Subject Learning', audience: 'Primary', language: 'Chinese / Mandarin', trending: true },
+    { id: 'bbc-languages-chinese', title: 'BBC Languages Chinese Essentials', description: 'Comprehensive video audio modules teaching Mandarin pronunciation, key tonal distinctions, everyday phrases, and foundational grammatical rules.', url: 'http://www.bbc.co.uk/languages/chinese/', category: 'Subject Learning', audience: 'All', language: 'Chinese / Mandarin' },
+    { id: 'chinese-boost-grammar', title: 'Chinese Boost Grammar Lab', description: 'Meticulous, grammar-focused articles, syntax breakdown tables, and particle usage rules tailored specifically for high school Mandarin coursework.', url: 'https://www.chineseboost.com/', category: 'Subject Learning', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'mandarin-blueprint-docs', title: 'Mandarin Blueprint Pronunciation Course', description: 'Teaches correct mouth-positioning, pinyin blends, and systemized memory techniques to recognize hundreds of complex characters in high school.', url: 'https://www.mandarinblueprint.com/', category: 'Subject Learning', audience: 'Secondary', language: 'Chinese / Mandarin' },
+    { id: 'yoyo-chinese-lessons', title: 'Yoyo Chinese Lesson Library', description: 'Interactive video lectures that break down conversational Chinese into practical, logical steps using helpful English comparisons for students.', url: 'https://yoyochinese.com/', category: 'Subject Learning', audience: 'All', language: 'Chinese / Mandarin', recommended: true },
+
+    // ==========================================
+    // --- Bahasa Melayu Resources ---
+    // ==========================================
+    
+    // --- E-Books ---
+    { id: 'jendela-dbp', title: 'Jendela DBP (Dewan Bahasa dan Pustaka)', description: 'Official Malaysian national library database offering digitized national literature, kids magazines, and traditional folklore (buku bergambar) to build national literacy.', url: 'https://jendeladbp.my/', category: 'E-Books', audience: 'All', language: 'Bahasa Melayu', recommended: true },
+    { id: 'storybooks-malaysia', title: 'Buku Cerita BM (Storybooks Malaysia)', description: 'Local primary reading resource presenting illustrated stories in both simple Bahasa Melayu and English to accelerate childhood vocabulary and spelling.', url: 'https://storybooksmalaysia.net/', category: 'E-Books', audience: 'Primary', language: 'Bahasa Melayu', trending: true },
+    { id: 'itbm-ebooks', title: 'ITBM Buku Pendidikan Digital', description: 'Malaysian Institute of Translation and Books educational portal supplying digitized school reference guides, high school literature and children\'s books.', url: 'https://itbm.com.my/', category: 'E-Books', audience: 'Secondary', language: 'Bahasa Melayu' },
+    { id: 'pnm-e-resources', title: 'Perpustakaan Negara Digital (e-PNM)', description: 'Access to thousands of educational books, children\'s science magazines, and historical documents in Malay, provided by the National Library of Malaysia.', url: 'https://e-pnm.gov.my/', category: 'E-Books', audience: 'All', language: 'Bahasa Melayu', recommended: true },
+    { id: 'pustaka-tun-lim', title: 'Pustaka Kanak-Kanak PNM', description: 'An interactive digital bookshelf showcasing local Malay folklore and modern primary school-appropriate bedtime stories with audio overlays.', url: 'https://www.pnm.gov.my/', category: 'E-Books', audience: 'Primary', language: 'Bahasa Melayu' },
+
+    // --- Databases & Research ---
+    { id: 'upustaka-consortium', title: 'u-Pustaka Konsortium Negara', description: 'The official digital library consortium of Malaysia, giving students free logged search access to thousands of educational journals, articles, and databases.', url: 'https://www.u-pustaka.gov.my/', category: 'Databases & Research', audience: 'Secondary', language: 'Bahasa Melayu', recommended: true },
+    { id: 'myjurnal-citation', title: 'MyJurnal Kedirektoran Jurnal Malaysia', description: 'Vast database indexing professional Malaysian research journals and academic studies, suitable for high school essays and STPM/school projects.', url: 'http://www.myjurnal.my/', category: 'Databases & Research', audience: 'Secondary', language: 'Bahasa Melayu' },
+    { id: 'dbp-kamus-prpm', title: 'Rujukan Persuratan Melayu (PRPM DBP)', description: 'The definitive Malaysian orthography database containing the Kamus Dewan dictionary, thesauruses, and official terms compiled by Dewan Bahasa dan Pustaka.', url: 'https://prpm.dbp.gov.my/', category: 'Databases & Research', audience: 'All', language: 'Bahasa Melayu', trending: true },
+    { id: 'arkib-negara', title: 'Portal Penyelidikan Arkib Negara Malaysia', description: 'The official national archives portal providing digitized historical files, national declarations, and independence journals for school history reports.', url: 'http://www.arkib.gov.my/', category: 'Databases & Research', audience: 'Secondary', language: 'Bahasa Melayu' },
+
+    // --- Quiz Platforms ---
+    { id: 'wordwall-bm-quiz', title: 'Wordwall BM Bahasa Melayu Quizzes', description: 'Thousands of free, colorful school quizzes, spelling wheels, and grammar pairing competitions designed by Malaysian educators for BM syntax mastery.', url: 'https://wordwall.net/', category: 'Quiz Platforms', audience: 'Primary', language: 'Bahasa Melayu', trending: true },
+    { id: 'kahoot-bm-grammar', title: 'Kahoot! Peraduan Tatabahasa Melayu', description: 'Interactive classroom matches focusing on proper BM sentence structure, active/passive voice, and classical literature vocabulary tests.', url: 'https://kahoot.com/subject/bahasa-melayu/', category: 'Quiz Platforms', audience: 'All', language: 'Bahasa Melayu' },
+    { id: 'quizizz-bm-kssr', title: 'Quizizz BM KSSR Latihan Tatabahasa', description: 'Custom quiz sets mirroring the national school syllabus, enabling students to practice grammar, pronouns (kata ganti nama), and idioms (simpulan bahasa).', url: 'https://quizizz.com/subject/bahasa-melayu', category: 'Quiz Platforms', audience: 'All', language: 'Bahasa Melayu', recommended: true },
+    { id: 'edpuzzle-bm-kurikulum', title: 'Edpuzzle BM Video Kuiz Interaktif', description: 'Educational video segments accompanied by embedded open-ended questions and checks on vocabulary, history, and moral choices in Malay.', url: 'https://edpuzzle.com/', category: 'Quiz Platforms', audience: 'Secondary', language: 'Bahasa Melayu' },
+
+    // --- Interactive Games ---
+    { id: 'shego-bm-grammar', title: 'Shego Interactive BM Grammar Games', description: 'Fun interactive Bahasa Melayu grammar, suffix (imbuhan), and vocabulary board-like games suited for primary school syllabus revisions.', url: 'https://www.shegolearning.com/', category: 'Interactive Games', audience: 'Primary', language: 'Bahasa Melayu' },
+    { id: 'bm-teka-silang-kata', title: 'Permainan Teka Silang Kata BM', description: 'Engaging, digital crossword puzzle game which tests kids\' vocabulary, spelling, and synonym knowledge of modern Bahasa Melayu.', url: 'https://wordwall.net/community/bm/teka-silang-kata', category: 'Interactive Games', audience: 'All', language: 'Bahasa Melayu', trending: true },
+    { id: 'e-belajar-game-kpm', title: 'KPM E-Belajar Interactive Play', description: 'Learning mini-games designed under Ministry guidelines, combining mathematics, sciences, and history with gamified rewards for elementary kids.', url: 'https://pautan.kpgr.gov.my/', category: 'Interactive Games', audience: 'Primary', language: 'Bahasa Melayu' },
+    { id: 'bm-kosa-kata-interaktif', title: 'Kosa Kata Interaktif Pintar', description: 'Spelling challenges, animal naming cards, and matching puzzles created to build secondary or primary language skills in a playful format.', url: 'https://www.educandy.com/', category: 'Interactive Games', audience: 'Primary', language: 'Bahasa Melayu' },
+
+    // --- Assessment Tools ---
+    { id: 'sistemguruonline-tests', title: 'Sistem Guru Online Assessment Bank', description: 'Highly structured formative PDF worksheets, mock test papers, and curricular evaluations compliant with national primary KSSR / KSSM secondary standards.', url: 'https://www.sistemguruonline.my/', category: 'Assessment Tools', audience: 'All', language: 'Bahasa Melayu' },
+    { id: 'bank-soalan-spm', title: 'Bank Soalan SPM & PT3 Nasional', description: 'An outstanding database of past-year national trial exam papers, answer keys, and diagnostic grading sheets compiled for secondary students.', url: 'https://banksoalan.online/', category: 'Assessment Tools', audience: 'Secondary', language: 'Bahasa Melayu', trending: true },
+    { id: 'saps-nkra-mock-portal', title: 'SAPS Ibu Bapa Analisis Ujian', description: 'School performance reporting dashboard supplying parents and students with a historical breakdown of mid-year, final, and trial exam scores.', url: 'https://sapsnkra.com.my/', category: 'Assessment Tools', audience: 'All', language: 'Bahasa Melayu' },
+    { id: 'pendidik-my-assessment', title: 'Portal Pendidik Akademik Ujian', description: 'Online resource presenting diagnostic checklists, lesson assessments, and printable worksheets for secondary level science, BM, and history.', url: 'https://www.pendidik.my/', category: 'Assessment Tools', audience: 'Secondary', language: 'Bahasa Melayu' },
+
+    // --- Subject Learning ---
+    { id: 'didiktv-kpm', title: 'Didik TV KPM (Kementerian Pendidikan)', description: 'Educational classroom video productions by the Ministry of Education Malaysia covering core high school subjects (Sains, Sejarah, Matematik) in Bahasa Melayu.', url: 'https://www.ntv7.com.my/didiktv', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu', recommended: true },
+    { id: 'portal-delima-kpm', title: 'DELIMa KPM Digital Learning', description: 'The official single-sign-on digital learning platform by the Ministry of Education, housing Google Classroom tools, school books, and interactive videos.', url: 'https://sites.google.com/moe.edu.my/login/delima-kpm', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu', recommended: true, trending: true },
+    { id: 'cikgu-tube-moe', title: 'CikguTube Portal Video Pembelajaran', description: 'Video repository featuring structured virtual classes, mathematics tips, and experiments narrated by creative Malaysian public school teachers.', url: 'https://cikgutube.moe-dl.edu.my/', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu' },
+    { id: 'astro-tutor-tv', title: 'Astro Tutor TV SPM & UPSR Portal', description: 'Educational broadcast portal containing dynamic revision videos, question walkthroughs, and tip segments for primary and secondary exam revisions.', url: 'http://www.astrotutortv.com.my/', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu', trending: true },
+    { id: 'akademiyoutuber-my', title: 'Akademi Youtuber Malaysia (AYU)', description: 'A massive community-driven portal hosting free live tuition streams, school-aligned lesson playlists, and virtual badges led by certified local educators.', url: 'https://www.akademiyoutuber.com/', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu', recommended: true },
+    { id: 'cikgusains-bm-notes', title: 'Cikgu Sains BM Notes Support', description: 'Curated scientific diagrams, experiments notes, and physics guidelines compiled in native Malay to make elementary and high school sciences simple.', url: 'https://cikgusains.com/', category: 'Subject Learning', audience: 'All', language: 'Bahasa Melayu' },
   ];
 
-  const categories = ['All', ...Array.from(new Set(resources.map(r => r.category)))];
+  const languages: ('All' | 'English' | 'Chinese / Mandarin' | 'Bahasa Melayu')[] = [
+    'All', 
+    'English', 
+    'Chinese / Mandarin', 
+    'Bahasa Melayu'
+  ];
+
+  const categories = [
+    'All',
+    'E-Books',
+    'Databases & Research',
+    'Quiz Platforms',
+    'Interactive Games',
+    'Assessment Tools',
+    'Subject Learning'
+  ];
 
   const filtered = resources.filter(res => {
     const matchesAudience = activeAudience === 'All' || res.audience === activeAudience || res.audience === 'All';
+    const matchesLanguage = activeLanguage === 'All' || res.language === activeLanguage;
     const matchesCategory = activeCategory === 'All' || res.category === activeCategory;
     const matchesSearch = res.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          res.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           res.category.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesAudience && matchesCategory && matchesSearch;
+    return matchesAudience && matchesLanguage && matchesCategory && matchesSearch;
   });
+
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  const paginatedResources = filtered.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  const getLanguageBadge = (lang: string) => {
+    switch (lang) {
+      case 'English': return '🇬🇧 English';
+      case 'Chinese / Mandarin': return '🇨🇳 Mandarin';
+      case 'Bahasa Melayu': return '🇲🇾 Bahasa Melayu';
+      default: return lang;
+    }
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-6 border-b border-natural-border">
         <div>
-          <h2 className="text-3xl font-serif font-black text-zera-emerald">Digital Gateway</h2>
-          <p className="text-natural-muted font-medium">Curated intellectual assets for Zera International scholars.</p>
+          <h2 className="text-3xl font-serif font-black text-zera-emerald">School Digital Gateway</h2>
+          <p className="text-natural-muted font-medium">Curated, safe eBooks, databases, quizzes, interactive games, assessments, and subjects for students.</p>
         </div>
         <div className="flex bg-white p-1 rounded-2xl border border-natural-border shadow-sm overflow-x-auto no-scrollbar">
-          {['All', 'Primary', 'Secondary', 'Teacher'].map((aud) => (
+          {['All', 'Primary', 'Secondary'].map((aud) => (
             <button
               key={aud}
               onClick={() => setActiveAudience(aud as any)}
@@ -191,7 +256,7 @@ export const OnlineResources: React.FC = () => {
                 activeAudience === aud ? "bg-zera-yellow text-zera-emerald shadow-sm" : "text-natural-muted hover:text-zera-emerald"
               )}
             >
-              {aud}
+              {aud === 'All' ? 'All Grades' : aud}
             </button>
           ))}
         </div>
@@ -202,7 +267,7 @@ export const OnlineResources: React.FC = () => {
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-muted group-focus-within:text-zera-yellow transition-colors" />
           <input 
             type="text"
-            placeholder="Search by title, subject or category..."
+            placeholder="Search school resources, quizzes, games..."
             className="w-full pl-12 pr-28 py-4 bg-white border border-natural-border rounded-3xl outline-none focus:ring-2 focus:ring-zera-yellow shadow-sm transition-all text-sm font-medium"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -220,7 +285,7 @@ export const OnlineResources: React.FC = () => {
           </div>
           <div>
             <p className="text-[10px] font-black text-zera-emerald uppercase tracking-widest leading-none mb-1">Trending</p>
-            <p className="text-sm font-bold text-natural-text">Oxford Owl</p>
+            <p className="text-sm font-bold text-natural-text">Quizizz Games</p>
           </div>
         </div>
         <div className="bg-zera-emerald/5 border border-zera-emerald/10 p-4 rounded-3xl flex items-center gap-3">
@@ -229,40 +294,69 @@ export const OnlineResources: React.FC = () => {
           </div>
           <div>
             <p className="text-[10px] font-black text-zera-emerald uppercase tracking-widest leading-none mb-1">Weekly Pick</p>
-            <p className="text-sm font-bold text-natural-text">Code.org</p>
+            <p className="text-sm font-bold text-natural-text">Oxford Owl Library</p>
           </div>
         </div>
       </div>
 
-      {/* Category Tabs */}
-      <div className="flex gap-2 p-1 bg-natural-border/20 rounded-2xl overflow-x-auto no-scrollbar">
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap",
-              activeCategory === cat ? "bg-white text-zera-emerald shadow-sm" : "text-natural-muted hover:text-zera-emerald"
-            )}
-          >
-            {cat}
-          </button>
-        ))}
+      {/* Language filter row */}
+      <div className="space-y-4">
+        <div>
+          <label className="text-[10px] font-black uppercase tracking-widest text-zera-emerald block mb-2">Display Languages</label>
+          <div className="flex gap-2 p-1 bg-natural-border/20 rounded-2xl overflow-x-auto no-scrollbar max-w-max">
+            {languages.map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setActiveLanguage(lang)}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap",
+                  activeLanguage === lang ? "bg-white text-zera-emerald shadow-sm" : "text-natural-muted hover:text-zera-emerald"
+                )}
+              >
+                {lang === 'All' ? 'All Languages' : lang}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Category filter row */}
+        <div>
+          <label className="text-[10px] font-black uppercase tracking-widest text-zera-emerald block mb-2">Digital Resource Categories</label>
+          <div className="flex gap-2 p-1 bg-natural-border/20 rounded-2xl overflow-x-auto no-scrollbar">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap",
+                  activeCategory === cat ? "bg-zera-emerald text-white shadow-sm" : "bg-white text-natural-muted border border-natural-border hover:text-zera-emerald"
+                )}
+              >
+                {cat !== 'All' && CATEGORY_ICONS[cat]}
+                {cat}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filtered.map((res) => (
+        {paginatedResources.map((res) => (
           <div key={res.id} className="bg-white border border-natural-border rounded-3xl p-6 shadow-sm hover:shadow-md transition-all flex flex-col group h-full relative overflow-hidden">
             {/* Decoration */}
             <div className="absolute top-0 right-0 w-24 h-24 bg-zera-emerald/5 rounded-full -mr-12 -mt-12 transition-transform group-hover:scale-150 duration-700" />
             
             <div className="flex justify-between items-start mb-4 relative z-10">
-              <div className={cn("px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border", 
-                res.audience === 'Teacher' ? 'bg-purple-50 text-purple-600 border-purple-100' : 
-                res.audience === 'Primary' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
-                res.audience === 'Secondary' ? 'bg-teal-50 text-teal-600 border-teal-100' : 'bg-natural-bg text-natural-muted border-natural-border'
-              )}>
-                {res.audience === 'All' ? 'Institutional' : res.audience}
+              <div className="flex gap-1.5 flex-wrap">
+                <div className={cn("px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border", 
+                  res.audience === 'Primary' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
+                  res.audience === 'Secondary' ? 'bg-teal-50 text-teal-600 border-teal-100' : 'bg-natural-bg text-natural-muted border-natural-border'
+                )}>
+                  {res.audience === 'All' ? 'All Grades' : res.audience}
+                </div>
+                <div className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border bg-emerald-50 text-emerald-600 border-emerald-100">
+                  {getLanguageBadge(res.language)}
+                </div>
               </div>
               <div className="flex gap-1">
                 {res.trending && (
@@ -301,14 +395,58 @@ export const OnlineResources: React.FC = () => {
         ))}
       </div>
 
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="mt-8 px-6 py-4 bg-white border border-natural-border rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm animate-in fade-in duration-300">
+          <span className="text-[10px] font-black uppercase tracking-wider text-natural-muted">
+            Showing <span className="font-bold text-zera-emerald">{(currentPage - 1) * itemsPerPage + 1}</span> - <span className="font-bold text-zera-emerald">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="font-bold text-zera-emerald">{filtered.length}</span>
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-lg border border-natural-border text-[9px] font-black uppercase tracking-widest hover:bg-natural-bg disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+            >
+              Prev
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: totalPages }).map((_, idx) => {
+                const pageNum = idx + 1;
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={cn(
+                      "w-7 h-7 rounded-lg text-[9px] font-black transition-all cursor-pointer",
+                      currentPage === pageNum 
+                        ? "bg-zera-emerald text-white shadow-sm" 
+                        : "text-natural-muted hover:bg-natural-bg"
+                    )}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded-lg border border-natural-border text-[9px] font-black uppercase tracking-widest hover:bg-natural-bg disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       {filtered.length === 0 && (
         <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-natural-border">
           <div className="w-16 h-16 bg-natural-bg rounded-full flex items-center justify-center mx-auto mb-4">
             <Globe className="w-8 h-8 text-natural-muted opacity-30" />
           </div>
-          <p className="text-natural-muted font-serif italic text-lg capitalize">No intellectual assets found in this archive.</p>
+          <p className="text-natural-muted font-serif italic text-lg capitalize">No school resources found matching your filters.</p>
           <button 
-            onClick={() => { setSearchTerm(''); setActiveCategory('All'); setActiveAudience('All'); }}
+            onClick={() => { setSearchTerm(''); setActiveLanguage('All'); setActiveCategory('All'); setActiveAudience('All'); }}
             className="mt-4 text-xs font-bold text-zera-emerald hover:underline"
           >
             Reset Filters
@@ -320,3 +458,4 @@ export const OnlineResources: React.FC = () => {
 };
 
 export default OnlineResources;
+

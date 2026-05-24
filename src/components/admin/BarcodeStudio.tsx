@@ -47,11 +47,28 @@ export const BarcodeStudio = () => {
   const [nextPreview, setNextPreview] = useState('');
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   useEffect(() => {
     fetchEntities();
     loadNextPreview();
   }, [activeType]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeType, searchTerm]);
+
+  const filteredEntities = entities.filter(e => 
+    (e.title || e.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (e.barcode || '').toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const totalPages = Math.ceil(filteredEntities.length / itemsPerPage);
+  const paginatedEntities = filteredEntities.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
   const toggleSelect = (id: string) => {
     const next = new Set(selectedIds);
@@ -61,11 +78,16 @@ export const BarcodeStudio = () => {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredEntities.length) {
-      setSelectedIds(new Set());
+    const currentPageIds = paginatedEntities.map(e => e.id);
+    const allSelectedOnPage = currentPageIds.length > 0 && currentPageIds.every(id => selectedIds.has(id));
+    
+    const next = new Set(selectedIds);
+    if (allSelectedOnPage) {
+      currentPageIds.forEach(id => next.delete(id));
     } else {
-      setSelectedIds(new Set(filteredEntities.map(e => e.id)));
+      currentPageIds.forEach(id => next.add(id));
     }
+    setSelectedIds(next);
   };
 
   const handlePrintBulk = () => {
@@ -290,11 +312,6 @@ export const BarcodeStudio = () => {
     printBarcodes([item]);
   };
 
-  const filteredEntities = entities.filter(e => 
-    (e.title || e.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (e.barcode || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -424,7 +441,7 @@ export const BarcodeStudio = () => {
                       <input 
                         type="checkbox"
                         className="rounded border-natural-border text-indigo-600 focus:ring-indigo-600"
-                        checked={filteredEntities.length > 0 && selectedIds.size === filteredEntities.length}
+                        checked={paginatedEntities.length > 0 && paginatedEntities.every(item => selectedIds.has(item.id))}
                         onChange={toggleSelectAll}
                       />
                     </th>
@@ -440,8 +457,8 @@ export const BarcodeStudio = () => {
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 opacity-20" />
                       </td>
                     </tr>
-                  ) : filteredEntities.length > 0 ? (
-                    filteredEntities.map((item) => (
+                  ) : paginatedEntities.length > 0 ? (
+                    paginatedEntities.map((item) => (
                       <tr key={item.id} className="hover:bg-natural-bg/30 transition-colors group">
                         <td className="px-6 py-6">
                           <input 
@@ -554,6 +571,50 @@ export const BarcodeStudio = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="px-6 py-4 bg-natural-bg/40 border-t border-natural-border flex flex-col sm:flex-row items-center justify-between gap-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-natural-muted">
+                  Showing <span className="font-bold text-zera-emerald">{(currentPage - 1) * itemsPerPage + 1}</span> - <span className="font-bold text-zera-emerald">{Math.min(currentPage * itemsPerPage, filteredEntities.length)}</span> of <span className="font-bold text-zera-emerald">{filteredEntities.length}</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 rounded-lg border border-natural-border text-[9px] font-black uppercase tracking-widest hover:bg-natural-bg disabled:opacity-40 disabled:pointer-events-none transition-all"
+                  >
+                    Prev
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: totalPages }).map((_, idx) => {
+                      const pageNum = idx + 1;
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={cn(
+                            "w-7 h-7 rounded-lg text-[9px] font-black transition-all",
+                            currentPage === pageNum 
+                              ? "bg-zera-emerald text-white shadow-sm" 
+                              : "text-natural-muted hover:bg-natural-bg"
+                          )}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 rounded-lg border border-natural-border text-[9px] font-black uppercase tracking-widest hover:bg-natural-bg disabled:opacity-40 disabled:pointer-events-none transition-all"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
