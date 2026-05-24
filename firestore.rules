@@ -1,0 +1,144 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // Admin check: Reads the user document to verify role, or checks bootstrapped email
+    function isAdmin() { 
+      return isSignedIn() && (
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+             request.auth.token.email == 'nurshahidahmohdayob@gmail.com' ||
+             request.auth.token.email == 'shahidah.a@zera.edu.my'
+      );
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- VALIDATION HELPERS ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'role']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.role in ['student', 'teacher', 'admin'] &&
+             (data.get('email', null) == null || (data.email is string && data.email.size() <= 100)) &&
+             (data.get('status', 'active') in ['active', 'archived']) &&
+             (data.get('createdAt', null) == null || (data.createdAt is string || data.createdAt is timestamp)) &&
+             (data.get('updatedAt', null) == null || (data.updatedAt is string || data.updatedAt is timestamp));
+    }
+
+    function isValidBook(data) {
+      return data.keys().hasAll(['title', 'author']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.author is string && data.author.size() <= 100 &&
+             (data.get('isbn', null) == null || (data.isbn is string && data.isbn.size() <= 20)) &&
+             (data.get('status', 'available') in ['available', 'unavailable', 'archived', 'lost', 'damaged', 'active']);
+    }
+
+    function isValidLoan(data) {
+      return data.keys().hasAll(['bookId', 'userId', 'checkoutDate', 'dueDate', 'status']) &&
+             isValidId(data.bookId) &&
+             isValidId(data.userId) &&
+             data.checkoutDate is string && data.checkoutDate.size() <= 100 &&
+             data.dueDate is string && data.dueDate.size() <= 100 &&
+             (data.get('returnDate', null) == null || (data.returnDate is string && data.returnDate.size() <= 100)) &&
+             data.status in ['active', 'returned', 'overdue', 'archived'];
+    }
+
+    function isValidAcquisition(data) {
+      return data.keys().hasAll(['title', 'requestedBy', 'status']) &&
+             data.title is string && data.title.size() <= 200 &&
+             isValidId(data.requestedBy) &&
+             data.status in ['pending', 'approved', 'ordered', 'received'];
+    }
+
+    // --- COLLECTION RULES ---
+
+    // 1. Users
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
+      // Only admins can list users (students/teachers shouldn't scrape the directory)
+      allow list: if isAdmin();
+      
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (isOwner(userId) && isValidUser(incoming()) && 
+         (incoming().role != 'admin' || request.auth.token.email in ['nurshahidahmohdayob@gmail.com', 'shahidah.a@zera.edu.my']))
+      );
+      
+      allow update: if isSignedIn() && (
+        // Admin can update anything valid
+        (isAdmin() && isValidUser(incoming())) ||
+        // Owner can update specific profile fields
+        (isOwner(userId) && isValidUser(incoming()) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'grade', 'department', 'phoneNumber', 'updatedAt']))
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    // 2. Books
+    match /books/{bookId} {
+      allow read: if true; // Public catalog
+      allow create: if isAdmin() && isValidBook(incoming()) && isValidId(bookId);
+      allow update: if isAdmin() && isValidBook(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 3. Loans
+    match /loans/{loanId} {
+      allow get: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      // Relational Sync: only admins can manage loans, ensuring book exists
+      allow create: if isAdmin() && isValidLoan(incoming()) && 
+                    exists(/databases/$(database)/documents/books/$(incoming().bookId));
+      
+      allow update: if isAdmin() && isValidLoan(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 4. Acquisitions
+    match /acquisitions/{acquisitionId} {
+      allow read: if isSignedIn() && (isOwner(resource.data.requestedBy) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.requestedBy == request.auth.uid || isAdmin());
+      
+      allow create: if isSignedIn() && isValidAcquisition(incoming()) && 
+                    isOwner(incoming().requestedBy) &&
+                    incoming().status == 'pending';
+      
+      allow update: if isSignedIn() && (
+        // Admin can change status
+        (isAdmin() && isValidAcquisition(incoming()) && 
+         incoming().diff(existing()).affectedKeys().hasAny(['status', 'priority', 'price', 'updatedAt'])) ||
+        // User can update their own pending request
+        (isOwner(existing().requestedBy) && existing().status == 'pending' &&
+         isValidAcquisition(incoming()) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'isbn', 'updatedAt']))
+      );
+      
+      allow delete: if isAdmin() || (isOwner(resource.data.requestedBy) && resource.data.status == 'pending');
+    }
+
+    // 5. Inventory Sessions
+    match /inventory_sessions/{sessionId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && 
+                    incoming().items is list &&
+                    incoming().items.size() <= 500; // Guard against huge payloads
+      allow update, delete: if false; // Audit logs are immutable
+    }
+
+  }
+}

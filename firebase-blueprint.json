@@ -1,0 +1,110 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "Represents a library member (student or teacher).",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "teacher", "admin"] },
+        "grade": { "type": "string" },
+        "department": { "type": "string" },
+        "studentId": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "archived"] },
+        "activeLoansCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "role"]
+    },
+    "books": {
+      "title": "Book",
+      "description": "Represents a book in the library catalog.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "isbn": { "type": "string" },
+        "summary": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "category": { "type": "string" },
+        "publishedYear": { "type": "integer" },
+        "totalCopies": { "type": "integer" },
+        "availableCopies": { "type": "integer" },
+        "status": { "type": "string", "enum": ["available", "unavailable", "archived"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "author"]
+    },
+    "loans": {
+      "title": "Loan",
+      "description": "Represents a book circulation record (checkout/return).",
+      "type": "object",
+      "properties": {
+        "bookId": { "type": "string" },
+        "bookTitle": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "checkoutDate": { "type": "string", "format": "date-time" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "returnDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["active", "returned", "overdue"] }
+      },
+      "required": ["bookId", "userId", "checkoutDate", "dueDate", "status"]
+    },
+    "acquisitions": {
+      "title": "Acquisition Request",
+      "description": "Represents a request for a new library book.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "isbn": { "type": "string" },
+        "requestedBy": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "ordered", "received"] },
+        "price": { "type": "number" },
+        "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "requestedBy", "status"]
+    },
+    "inventory_sessions": {
+      "title": "Inventory Audit Session",
+      "description": "Logs of books scanned during an inventory check.",
+      "type": "object",
+      "properties": {
+        "items": { "type": "array" },
+        "totalItems": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string" }
+      },
+      "required": ["items", "totalItems", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "users",
+      "description": "User profiles and membership data."
+    },
+    "books/{bookId}": {
+      "schema": "books",
+      "description": "Library catalog records."
+    },
+    "loans/{loanId}": {
+      "schema": "loans",
+      "description": "Circulation logs."
+    },
+    "acquisitions/{acquisitionId}": {
+      "schema": "acquisitions",
+      "description": "Book acquisition requests."
+    },
+    "inventory_sessions/{sessionId}": {
+      "schema": "inventory_sessions",
+      "description": "Audit session logs."
+    }
+  }
+}

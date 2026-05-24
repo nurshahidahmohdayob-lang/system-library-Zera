@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-natural-bg: #FCFAF7;
+  --color-natural-text: #1F2937;
+  --color-natural-nav: #FFFFFF;
+  --color-natural-border: #E5E7EB;
+  --color-natural-muted: #6B7280;
+  
+  /* Zera School Colors */
+  --color-zera-emerald: #064E3B; /* Dark Emerald */
+  --color-zera-emerald-dark: #022C22;
+  --color-zera-emerald-light: #059669;
+  --color-zera-yellow: #FBBF24; /* School Yellow */
+  --color-zera-yellow-dark: #B45309;
+  --color-zera-rust: #EF4444;
+
+  /* Legacy mappings for components already using natural-* prefix */
+  --color-natural-sage: #064E3B;
+  --color-natural-sage-light: #FBBF24;
+  --color-natural-rust: #EF4444;
+}
+
+@layer base {
+}
