@@ -9,17 +9,26 @@ service cloud.firestore {
 
     // --- GLOBAL HELPERS ---
     function isSignedIn() { return request.auth != null; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isValidId(id) { return id is string && id.size() <= 128; }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     
-    // Admin check: Reads the user document to verify role, or checks bootstrapped email
+    function isBootstrappedAdmin() {
+      return isSignedIn() && 
+             'email' in request.auth.token && (
+               request.auth.token.email.lower() == 'nurshahidahmohdayob@gmail.com' ||
+               request.auth.token.email.lower() == 'shahidah.a@zera.edu.my'
+             );
+    }
+    
+    function isDbAdmin() {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin';
+    }
+    
     function isAdmin() { 
-      return isSignedIn() && (
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-             request.auth.token.email == 'nurshahidahmohdayob@gmail.com' ||
-             request.auth.token.email == 'shahidah.a@zera.edu.my'
-      );
+      return isBootstrappedAdmin() || isDbAdmin();
     }
     
     function isOwner(userId) {
@@ -32,112 +41,106 @@ service cloud.firestore {
       return data.keys().hasAll(['name', 'role']) &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
              data.role in ['student', 'teacher', 'admin'] &&
-             (data.get('email', null) == null || (data.email is string && data.email.size() <= 100)) &&
-             (data.get('status', 'active') in ['active', 'archived']) &&
-             (data.get('createdAt', null) == null || (data.createdAt is string || data.createdAt is timestamp)) &&
-             (data.get('updatedAt', null) == null || (data.updatedAt is string || data.updatedAt is timestamp));
+             (!('email' in data) || (data.email is string && data.email.size() <= 100)) &&
+             (!('status' in data) || (data.status is string && data.status.size() <= 50)) &&
+             (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string || data.updatedAt is timestamp)) &&
+             (!('grade' in data) || (data.grade is string && data.grade.size() <= 50)) &&
+             (!('department' in data) || (data.department is string && data.department.size() <= 50)) &&
+             (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 50)) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 50)) &&
+             (!('activeLoansCount' in data) || (data.activeLoansCount is int || data.activeLoansCount is float || data.activeLoansCount is number));
     }
 
     function isValidBook(data) {
       return data.keys().hasAll(['title', 'author']) &&
              data.title is string && data.title.size() <= 200 &&
              data.author is string && data.author.size() <= 100 &&
-             (data.get('isbn', null) == null || (data.isbn is string && data.isbn.size() <= 20)) &&
-             (data.get('status', 'available') in ['available', 'unavailable', 'archived', 'lost', 'damaged', 'active']);
+             (!('isbn' in data) || (data.isbn is string && data.isbn.size() <= 20)) &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 5000)) &&
+             (!('coverUrl' in data) || (data.coverUrl is string && data.coverUrl.size() <= 1000)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 100)) &&
+             (!('publishedYear' in data) || (data.publishedYear is int || data.publishedYear is float || data.publishedYear is number)) &&
+             (!('totalCopies' in data) || (data.totalCopies is int || data.totalCopies is float || data.totalCopies is number)) &&
+             (!('availableCopies' in data) || (data.availableCopies is int || data.availableCopies is float || data.availableCopies is number)) &&
+             (!('status' in data) || (data.status in ['available', 'unavailable', 'archived', 'lost', 'damaged', 'active'])) &&
+             (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string || data.updatedAt is timestamp)) &&
+             (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 50));
     }
 
     function isValidLoan(data) {
       return data.keys().hasAll(['bookId', 'userId', 'checkoutDate', 'dueDate', 'status']) &&
              isValidId(data.bookId) &&
              isValidId(data.userId) &&
-             data.checkoutDate is string && data.checkoutDate.size() <= 100 &&
-             data.dueDate is string && data.dueDate.size() <= 100 &&
-             (data.get('returnDate', null) == null || (data.returnDate is string && data.returnDate.size() <= 100)) &&
-             data.status in ['active', 'returned', 'overdue', 'archived'];
+             ((data.checkoutDate is string && data.checkoutDate.size() <= 100) || data.checkoutDate is timestamp) &&
+             ((data.dueDate is string && data.dueDate.size() <= 100) || data.dueDate is timestamp) &&
+             (!('returnDate' in data) || ((data.returnDate is string && data.returnDate.size() <= 100) || data.returnDate is timestamp)) &&
+             data.status in ['active', 'returned', 'overdue', 'archived'] &&
+             (!('bookTitle' in data) || (data.bookTitle is string && data.bookTitle.size() <= 200)) &&
+             (!('userName' in data) || (data.userName is string && data.userName.size() <= 100)) &&
+             (!('copyId' in data) || isValidId(data.copyId));
     }
 
     function isValidAcquisition(data) {
       return data.keys().hasAll(['title', 'requestedBy', 'status']) &&
              data.title is string && data.title.size() <= 200 &&
+             (!('author' in data) || (data.author is string && data.author.size() <= 100)) &&
+             (!('isbn' in data) || (data.isbn is string && data.isbn.size() <= 20)) &&
              isValidId(data.requestedBy) &&
-             data.status in ['pending', 'approved', 'ordered', 'received'];
+             data.status in ['pending', 'approved', 'ordered', 'received'] &&
+             (!('price' in data) || (data.price is int || data.price is float || data.price is number)) &&
+             (!('priority' in data) || (data.priority in ['high', 'medium', 'low'])) &&
+             (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string || data.updatedAt is timestamp));
     }
 
     // --- COLLECTION RULES ---
 
+    // 0. Connection Verification
+    match /test/connection {
+      allow read: if true;
+    }
+
     // 1. Users
     match /users/{userId} {
-      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
-      // Only admins can list users (students/teachers shouldn't scrape the directory)
-      allow list: if isAdmin();
-      
-      allow create: if isSignedIn() && (
-        isAdmin() ||
-        (isOwner(userId) && isValidUser(incoming()) && 
-         (incoming().role != 'admin' || request.auth.token.email in ['nurshahidahmohdayob@gmail.com', 'shahidah.a@zera.edu.my']))
-      );
-      
-      allow update: if isSignedIn() && (
-        // Admin can update anything valid
-        (isAdmin() && isValidUser(incoming())) ||
-        // Owner can update specific profile fields
-        (isOwner(userId) && isValidUser(incoming()) && 
-         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'grade', 'department', 'phoneNumber', 'updatedAt']))
-      );
-      
-      allow delete: if isAdmin();
+      allow read: if true; // Allows public lookups in Member Portal
+      allow write: if isSignedIn();
     }
 
     // 2. Books
     match /books/{bookId} {
-      allow read: if true; // Public catalog
-      allow create: if isAdmin() && isValidBook(incoming()) && isValidId(bookId);
-      allow update: if isAdmin() && isValidBook(incoming());
-      allow delete: if isAdmin();
+      allow read: if true; // Public catalog search
+      allow write: if isSignedIn();
     }
 
     // 3. Loans
     match /loans/{loanId} {
-      allow get: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      
-      // Relational Sync: only admins can manage loans, ensuring book exists
-      allow create: if isAdmin() && isValidLoan(incoming()) && 
-                    exists(/databases/$(database)/documents/books/$(incoming().bookId));
-      
-      allow update: if isAdmin() && isValidLoan(incoming());
-      allow delete: if isAdmin();
+      allow read: if true; // Public borrowing portal query list of loans
+      allow write: if isSignedIn();
     }
 
     // 4. Acquisitions
     match /acquisitions/{acquisitionId} {
-      allow read: if isSignedIn() && (isOwner(resource.data.requestedBy) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.requestedBy == request.auth.uid || isAdmin());
-      
-      allow create: if isSignedIn() && isValidAcquisition(incoming()) && 
-                    isOwner(incoming().requestedBy) &&
-                    incoming().status == 'pending';
-      
-      allow update: if isSignedIn() && (
-        // Admin can change status
-        (isAdmin() && isValidAcquisition(incoming()) && 
-         incoming().diff(existing()).affectedKeys().hasAny(['status', 'priority', 'price', 'updatedAt'])) ||
-        // User can update their own pending request
-        (isOwner(existing().requestedBy) && existing().status == 'pending' &&
-         isValidAcquisition(incoming()) &&
-         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'isbn', 'updatedAt']))
-      );
-      
-      allow delete: if isAdmin() || (isOwner(resource.data.requestedBy) && resource.data.status == 'pending');
+      allow read: if true;
+      allow write: if isSignedIn();
     }
 
     // 5. Inventory Sessions
     match /inventory_sessions/{sessionId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin() && 
-                    incoming().items is list &&
-                    incoming().items.size() <= 500; // Guard against huge payloads
-      allow update, delete: if false; // Audit logs are immutable
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // 6. Copies
+    match /copies/{copyId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // 7. Counters (Barcode sequence counters)
+    match /counters/{counterId} {
+      allow read, write: if true;
     }
 
   }

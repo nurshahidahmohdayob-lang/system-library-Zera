@@ -16,13 +16,30 @@ import { collection, query, where, getDocs, onSnapshot, orderBy } from 'firebase
 import { UserProfile, Loan, Book } from '@/src/types/index';
 import { cn } from '@/src/lib/utils';
 import { format, isAfter, parseISO } from 'date-fns';
+import { useAuth, handleFirestoreError, OperationType } from '@/src/hooks/useAuth';
 
-export const MemberPortal = () => {
+interface MemberPortalProps {
+  onOpenAuth?: () => void;
+}
+
+export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
+  const { profile: loggedInProfile, logout } = useAuth();
+  const [typedName, setTypedName] = useState('');
+  const [selectedRole, setSelectedRole] = useState<'student' | 'teacher'>('student');
+  const [matchedCandidates, setMatchedCandidates] = useState<UserProfile[]>([]);
   const [memberId, setMemberId] = useState('');
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loans, setLoans] = useState<(Loan & { book?: Book })[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loggedInProfile && (loggedInProfile.role === 'student' || loggedInProfile.role === 'teacher')) {
+      setProfile(loggedInProfile);
+    } else {
+      setProfile(null);
+    }
+  }, [loggedInProfile]);
 
   useEffect(() => {
     if (!profile) return;
@@ -35,21 +52,26 @@ export const MemberPortal = () => {
     );
 
     const unsubscribe = onSnapshot(loansQ, async (loanSnap) => {
-      const loanData = loanSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Loan));
+      const loanData = loanSnap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Loan));
       
-      // Fetch books to match with loans
-      const booksSnap = await getDocs(collection(db, 'books'));
-      const booksMap = new Map(booksSnap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() } as Book]));
-      
-      setLoans(loanData.map(loan => ({
-        ...loan,
-        book: booksMap.get(loan.bookId)
-      })));
-      setLoading(false);
+      try {
+        // Fetch books to match with loans
+        const booksSnap = await getDocs(collection(db, 'books'));
+        const booksMap = new Map(booksSnap.docs.map(doc => [doc.id, { ...doc.data(), id: doc.id } as Book]));
+        
+        setLoans(loanData.map(loan => ({
+          ...loan,
+          book: booksMap.get(loan.bookId)
+        })));
+        setLoading(false);
+      } catch (bookErr) {
+        handleFirestoreError(bookErr, OperationType.LIST, 'books');
+      }
     }, (err) => {
       console.error("Loan fetch error:", err);
       setError("Unable to sync borrowing records.");
       setLoading(false);
+      handleFirestoreError(err, OperationType.LIST, 'loans');
     });
 
     return () => unsubscribe();
@@ -57,32 +79,57 @@ export const MemberPortal = () => {
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!memberId.trim()) return;
+    if (!typedName.trim()) return;
 
     setLoading(true);
     setError(null);
     setProfile(null);
     setLoans([]);
+    setMatchedCandidates([]);
 
     try {
       const usersRef = collection(db, 'users');
-      let q = query(usersRef, where('studentId', '==', memberId.trim()));
-      let snapshot = await getDocs(q);
-
-      if (snapshot.empty) {
-        q = query(usersRef, where('email', '==', memberId.trim()));
+      // Find all users with the requested role
+      const q = query(usersRef, where('role', '==', selectedRole));
+      
+      let snapshot;
+      try {
         snapshot = await getDocs(q);
+      } catch (docErr) {
+        handleFirestoreError(docErr, OperationType.LIST, 'users');
+        throw docErr;
       }
 
       if (snapshot.empty) {
-        setError('No members found with this ID or Email.');
+        setError(`No ${selectedRole} profiles found in the system.`);
         setLoading(false);
         return;
       }
 
-      const userData = { uid: snapshot.docs[0].id, ...snapshot.docs[0].data() } as UserProfile;
-      setProfile(userData);
-    } catch (err) {
+      const searchLower = typedName.trim().toLowerCase();
+      const candidates = snapshot.docs
+        .map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile))
+        .filter(user => {
+          const nameLower = (user.name || '').toLowerCase();
+          const idMatch = user.studentId && user.studentId.toLowerCase() === searchLower;
+          return nameLower.includes(searchLower) || searchLower.includes(nameLower) || idMatch;
+        });
+
+      if (candidates.length === 0) {
+        setError(`No ${selectedRole} profiles found matching "${typedName}". Please verify your spelling.`);
+        setLoading(false);
+        return;
+      }
+
+      if (candidates.length === 1) {
+        // Only one match - select immediately
+        setProfile(candidates[0]);
+      } else {
+        // Multiple matches - let the user select
+        setMatchedCandidates(candidates);
+      }
+      setLoading(false);
+    } catch (err: any) {
       console.error(err);
       setError('An error occurred during verification.');
       setLoading(false);
@@ -95,44 +142,162 @@ export const MemberPortal = () => {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {!profile ? (
-        <div className="max-w-xl mx-auto py-12">
-          <div className="text-center mb-10">
-            <div className="w-20 h-20 bg-zera-yellow/20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border-4 border-white">
+        matchedCandidates.length > 0 ? (
+          <div className="max-w-xl mx-auto py-12 text-center space-y-8 animate-in fade-in zoom-in-95 duration-300">
+            <div className="w-20 h-20 bg-zera-yellow/20 rounded-full flex items-center justify-center mx-auto shadow-sm border-4 border-white animate-pulse">
               <User className="w-10 h-10 text-zera-emerald" />
             </div>
-            <h2 className="text-4xl font-serif font-black text-zera-emerald">Member Access</h2>
-            <p className="text-natural-muted font-medium mt-2">Enter your credentials to view your personal library archive.</p>
-          </div>
+            <div className="space-y-2">
+              <h2 className="text-3xl font-serif font-black text-zera-emerald">Select Your Profile</h2>
+              <p className="text-natural-muted font-medium max-w-sm mx-auto text-sm">
+                We found several {selectedRole === 'teacher' ? 'teachers' : 'students'} matching your search. Please choose your correct profile below:
+              </p>
+            </div>
 
-          <form onSubmit={handleSearch} className="space-y-4">
-            <div className="relative group">
-              <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-natural-muted group-focus-within:text-zera-emerald transition-colors" />
-              <input 
-                type="text"
-                placeholder="Student ID or Institutional Email"
-                className="w-full pl-14 pr-6 py-5 bg-white border-2 border-natural-border rounded-3xl outline-none focus:border-zera-yellow shadow-lg transition-all text-lg font-bold placeholder:text-natural-muted/50"
-                value={memberId}
-                onChange={(e) => setMemberId(e.target.value)}
-              />
-              <button 
-                type="submit"
-                disabled={loading}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-zera-emerald text-white rounded-2xl hover:bg-zera-emerald-dark disabled:opacity-50 transition-all shadow-md group-hover:scale-105"
+            <div className="grid grid-cols-1 gap-4 text-left">
+              {matchedCandidates.map((candidate) => (
+                <button
+                  key={candidate.uid}
+                  type="button"
+                  onClick={() => {
+                    setProfile(candidate);
+                    setMatchedCandidates([]);
+                  }}
+                  className="bg-white border-2 border-natural-border hover:border-zera-emerald hover:bg-emerald-50/20 p-5 rounded-[24px] text-left transition-all hover:scale-[1.01] shadow-sm flex flex-col justify-between group cursor-pointer focus:ring-2 focus:ring-zera-yellow outline-none"
+                >
+                  <div className="pointer-events-none">
+                    <p className="font-extrabold text-natural-text text-base leading-tight group-hover:text-zera-emerald transition-colors">{candidate.name}</p>
+                    <div className="text-[10px] font-black uppercase text-zera-emerald tracking-wider mt-1.5 flex items-center gap-1.5">
+                      <span>{candidate.role}</span>
+                      {candidate.grade && (
+                        <>
+                          <span className="opacity-40">•</span>
+                          <span>{candidate.grade}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-4 text-[11px] font-black uppercase tracking-wider text-natural-muted group-hover:text-zera-emerald pointer-events-none">
+                    <span>Borrowing Portfolio</span>
+                    <ArrowRight className="w-4 h-4 transform group-hover:translate-x-1 transition-transform" />
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="pt-4">
+              <button
+                type="button"
+                onClick={() => setMatchedCandidates([])}
+                className="text-xs font-black uppercase tracking-widest text-natural-muted hover:text-zera-emerald transition-colors"
               >
-                {loading ? <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <ArrowRight className="w-6 h-6" />}
+                ← Back to Search
               </button>
             </div>
-            {error && (
-              <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-100 rounded-2xl text-red-600 text-sm font-bold animate-in zoom-in-95">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                {error}
+          </div>
+        ) : (
+          <div className="max-w-xl mx-auto py-12 text-center space-y-8 animate-in fade-in zoom-in-95 duration-300">
+            <div className="w-24 h-24 bg-zera-yellow/20 rounded-full flex items-center justify-center mx-auto shadow-sm border-4 border-white">
+              <User className="w-12 h-12 text-zera-emerald" />
+            </div>
+            
+            <div className="space-y-3">
+              <h2 className="text-4xl font-serif font-black text-zera-emerald">Member Borrowing Portal</h2>
+              <p className="text-natural-muted font-medium max-w-md mx-auto leading-relaxed text-sm">
+                Students and Teachers can view borrow history instantly by selecting your role and searching your name below.
+              </p>
+            </div>
+
+            <form onSubmit={handleSearch} className="space-y-6 bg-white border border-natural-border rounded-[36px] p-6 shadow-sm text-left">
+              {/* Role Toggle Selector */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-natural-muted italic block px-1">
+                  Select Member Role
+                </label>
+                <div className="bg-natural-bg p-1 rounded-2xl flex border-2 border-natural-border gap-1 animate-in">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRole('student');
+                      setError(null);
+                    }}
+                    className={cn(
+                      "flex-1 py-3 px-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer select-none border border-transparent",
+                      selectedRole === 'student'
+                        ? "bg-white text-zera-emerald border-natural-border shadow-sm font-black"
+                        : "text-natural-muted hover:text-natural-text"
+                    )}
+                  >
+                    <User className="w-4 h-4" />
+                    Student / Learner
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRole('teacher');
+                      setError(null);
+                    }}
+                    className={cn(
+                      "flex-1 py-3 px-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer select-none border border-transparent",
+                      selectedRole === 'teacher'
+                        ? "bg-white text-zera-emerald border-natural-border shadow-sm font-black"
+                        : "text-natural-muted hover:text-natural-text"
+                    )}
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    Teacher / Educator
+                  </button>
+                </div>
               </div>
-            )}
-            <p className="text-center text-xs text-natural-muted font-bold uppercase tracking-widest pt-4">
-              Authorized access only • SECURE SSL
-            </p>
-          </form>
-        </div>
+
+              {/* Name Search field */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-natural-muted italic block px-1">
+                  Type Your Name
+                </label>
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-muted pointer-events-none" />
+                  <input
+                    type="text"
+                    required
+                    value={typedName}
+                    onChange={(e) => setTypedName(e.target.value)}
+                    placeholder="Enter your registered name..."
+                    className="w-full bg-natural-bg border-2 border-natural-border hover:border-zera-yellow/60 focus:border-zera-yellow rounded-2xl pl-12 pr-6 py-4 text-sm font-bold text-natural-text placeholder-natural-muted transition-colors outline-none shadow-inner"
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl flex items-start gap-2.5 text-xs font-bold leading-relaxed">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-4 bg-zera-emerald hover:bg-zera-emerald-dark disabled:bg-natural-border text-white rounded-3xl font-black text-xs uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-all cursor-pointer select-none"
+              >
+                {loading ? (
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Search className="w-4 h-4" />
+                    View Borrowed Books
+                  </>
+                )}
+              </button>
+            </form>
+            
+            <div className="pt-2 border-t border-natural-border/60">
+              <p className="text-[10px] font-black text-natural-muted uppercase tracking-[0.2em] leading-normal">
+                Authorized OPAC Self-Check Directory
+              </p>
+            </div>
+          </div>
+        )
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Sidebar Info */}
@@ -172,10 +337,20 @@ export const MemberPortal = () => {
               </div>
 
               <button 
-                onClick={() => { setProfile(null); setMemberId(''); }}
-                className="w-full mt-8 flex items-center justify-center gap-2 py-4 text-natural-muted font-black text-[10px] uppercase tracking-widest border border-natural-border rounded-2xl hover:bg-natural-bg transition-colors"
+                onClick={async () => {
+                  try {
+                    await logout();
+                  } catch (e) {
+                    console.error("Logout failed:", e);
+                  }
+                  setProfile(null);
+                  setMemberId('');
+                  setTypedName('');
+                  setMatchedCandidates([]);
+                }}
+                className="w-full mt-8 flex items-center justify-center gap-2 py-4 text-natural-muted hover:text-red-500 font-black text-[10px] uppercase tracking-widest border border-natural-border rounded-2xl hover:bg-natural-bg transition-colors"
               >
-                Logout Portal
+                Exit Member Portal
               </button>
             </div>
 

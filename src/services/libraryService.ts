@@ -20,7 +20,7 @@ export const CatalogService = {
   async getBooks(searchTerm?: string) {
     const path = 'books';
     try {
-      let q = query(collection(db, path), orderBy('title'));
+      const q = query(collection(db, path), orderBy('title'));
       // Firestore doesn't support full-text search easily, we'll do simple filtering
       // Real apps use Algolia or similar. We'll fetch all or limited for the demo.
       const snapshot = await getDocs(q);

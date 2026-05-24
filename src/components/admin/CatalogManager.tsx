@@ -58,7 +58,7 @@ export const CatalogManager = () => {
     // Fetch all books and filter in-memory to ensure visibility of un-migrated records
     const q = query(collection(db, 'books'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allBooks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Book));
+      const allBooks = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Book));
       // Show books that are active or haven't been assigned a status yet (new registrations default to active)
       const activeBooks = allBooks.filter(book => book.status !== 'archived');
       setBooks(activeBooks.sort((a, b) => (a.title || '').localeCompare(b.title || '')));

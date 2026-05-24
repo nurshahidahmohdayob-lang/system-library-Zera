@@ -18,7 +18,7 @@ export const BookGrid = () => {
     // Show only active books in the public grid
     const q = query(collection(db, 'books'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const booksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Book));
+      const booksData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Book));
       setBooks(booksData.filter(b => b.status !== 'archived'));
       setLoading(false);
     }, (error) => {

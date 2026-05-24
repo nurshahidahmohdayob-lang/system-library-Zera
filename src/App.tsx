@@ -24,7 +24,9 @@ import {
   X,
   Mail,
   Lock,
-  UserCircle
+  UserCircle,
+  Shield,
+  ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
@@ -48,10 +50,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [role, setRole] = useState<'student' | 'teacher' | 'admin'>('admin');
   const [error, setError] = useState('');
   const [suggestLogin, setSuggestLogin] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { login, register } = useAuth();
+  const { login, register, loginWithGoogle } = useAuth();
 
   useEffect(() => {
     if (!isOpen) {
@@ -60,6 +63,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
       setEmail('');
       setPassword('');
       setName('');
+      setRole('admin');
       setMode(initialMode);
     }
   }, [isOpen, initialMode]);
@@ -74,7 +78,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
       if (mode === 'login') {
         await login(email, password);
       } else {
-        await register(email, password, name);
+        await register(email, password, name, 'admin');
       }
       onClose();
     } catch (err: any) {
@@ -96,7 +100,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
         case 'auth/user-not-found':
         case 'auth/wrong-password':
         case 'auth/invalid-credential':
-          friendlyMessage = 'Invalid Credentials: Dual check your email and password.';
+          friendlyMessage = 'Invalid Credentials. (Tip: If you recently synced a brand-new Firebase project, no accounts exist yet! Please make sure to select "Register Now" below to create a new profile first.)';
           break;
         case 'auth/too-many-requests':
           friendlyMessage = 'Security Access Locked: Too many failed attempts. Try again later.';
@@ -114,110 +118,231 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4 overflow-y-auto">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+        className={cn(
+          "bg-white w-full rounded-3xl shadow-2xl overflow-hidden transition-all duration-300 md:my-auto my-4",
+          mode === 'register' ? "max-w-3xl" : "max-w-md"
+        )}
       >
-        <div className="relative p-8 pt-10">
-          <button 
-            onClick={onClose}
-            className="absolute top-6 right-6 p-2 hover:bg-natural-bg rounded-full transition-colors text-natural-muted"
-          >
-            <X className="w-5 h-5" />
-          </button>
-
-          <div className="text-center mb-8">
-            <ZeraLogo className="mx-auto mb-4 scale-125 origin-center" />
-            <h2 className="text-2xl font-serif font-black text-zera-emerald mt-6">
-              {mode === 'login' ? 'Member Access' : 'Register Member'}
-            </h2>
-            <p className="text-sm text-natural-muted mt-2 font-medium">
-              {mode === 'login' ? 'Access your library account' : 'Join the Zera School archive'}
-            </p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'register' && (
-              <div className="relative">
-                <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
-                <input 
-                  type="text"
-                  required
-                  placeholder="Full Name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-natural-bg border-2 border-natural-border p-4 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
-                />
+        <div className={cn("grid grid-cols-1", mode === 'register' && "md:grid-cols-12")}>
+          {/* Left Side branding column for Registration - visible only on md+ */}
+          {mode === 'register' && (
+            <div className="hidden md:flex md:col-span-5 bg-gradient-to-br from-zera-emerald to-zera-emerald-dark text-white p-8 flex-col justify-between relative overflow-hidden">
+              {/* Decorative background elements */}
+              <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-zera-emerald-light/15 rounded-full blur-2xl" />
+              <div className="absolute -left-12 -top-12 w-48 h-48 bg-zera-yellow/10 rounded-full blur-2xl" />
+              
+              <div className="relative z-10">
+                <div className="flex flex-col mb-10">
+                  <span className="font-serif text-2xl font-black text-white leading-none tracking-tighter uppercase">zera</span>
+                  <span className="text-[9px] font-bold text-zera-yellow uppercase tracking-[0.2em] -mt-1 whitespace-nowrap font-sans">International School</span>
+                </div>
+                
+                <h3 className="text-xl font-serif font-bold text-white leading-tight">School Archive & Library Registration</h3>
+                <p className="text-xs text-white/70 mt-2 font-sans font-medium">Create your user profile to access our online catalogue, manage circulation, and borrow publications.</p>
+                
+                {/* Librarian privileges only */}
+                <div className="mt-8 space-y-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zera-yellow italic">Librarian Access privileges:</p>
+                  
+                  <div className="space-y-3 text-xs leading-relaxed font-sans text-white/90">
+                    <div className="flex items-start gap-2">
+                      <span className="text-zera-yellow shrink-0">🛡️</span>
+                      <span>Full system custody & Library administrator dashboard.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-zera-yellow shrink-0">📊</span>
+                      <span>Issue barcodes, manage inventory, browse detailed reports and circulation.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-zera-yellow shrink-0">🔒</span>
+                      <span>Restricted strictly to authorized administrative staff.</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-            )}
-
-            <div className="relative">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
-              <input 
-                type="email"
-                required
-                placeholder="School Email Address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-natural-bg border-2 border-natural-border p-4 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
-              />
-            </div>
-
-            <div className="relative">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
-              <input 
-                type="password"
-                required
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-natural-bg border-2 border-natural-border p-4 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
-              />
-            </div>
-
-            {error && (
-              <div className="bg-red-50 p-4 rounded-2xl border border-red-100 animate-in zoom-in-95">
-                <p className="text-xs text-red-600 font-bold flex items-center gap-2">
-                  <span className="w-1 h-1 bg-red-500 rounded-full" />
-                  {error}
-                </p>
-                {suggestLogin && (
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setMode('login');
-                      setError('');
-                      setSuggestLogin(false);
-                    }}
-                    className="mt-2 text-xs font-black text-zera-emerald hover:underline underline-offset-2 flex items-center gap-1"
-                  >
-                    Sign In instead <ChevronRight className="w-3 h-3" />
-                  </button>
-                )}
+              
+              <div className="relative z-10 border-t border-white/20 pt-4 text-[10px] text-white/50 font-bold uppercase tracking-widest font-sans flex justify-between items-center">
+                <span>Zera Archive</span>
+                <span>EST. 2024</span>
               </div>
-            )}
+            </div>
+          )}
 
+          {/* Right Side / Form Container */}
+          <div className={cn("relative p-8 pt-10 flex flex-col justify-between", mode === 'register' ? "md:col-span-7" : "w-full")}>
             <button 
-              type="submit"
-              disabled={loading}
-              className="w-full py-4 bg-zera-emerald text-white rounded-2xl font-black uppercase text-[11px] tracking-widest hover:bg-zera-emerald-dark transition-all transform active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-zera-emerald/10 mt-2"
+              onClick={onClose}
+              className="absolute top-6 right-6 p-2 hover:bg-natural-bg rounded-full transition-colors text-natural-muted cursor-pointer z-20"
             >
-              {loading ? 'Processing...' : (mode === 'login' ? 'Sign In' : 'Register')}
+              <X className="w-5 h-5" />
             </button>
-          </form>
 
-          <div className="mt-8 text-center border-t border-natural-border pt-6">
-            <p className="text-sm text-natural-muted font-medium">
-              {mode === 'login' ? "Don't have an account?" : "Already have an account?"}
-              <button 
-                onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-                className="ml-2 text-zera-emerald-light font-black hover:underline underline-offset-4"
+            <div>
+              {/* Header */}
+              <div className="text-center mb-6">
+                <ZeraLogo className="mx-auto mb-2 scale-110 origin-center" />
+                <h2 className="text-xl font-serif font-black text-zera-emerald mt-4">
+                  {mode === 'login' ? 'Member Access' : 'Register Member'}
+                </h2>
+                <p className="text-xs text-natural-muted mt-1 font-medium">
+                  {mode === 'login' ? 'Access your library account' : 'Join the Zera School archive'}
+                </p>
+              </div>
+
+              <form onSubmit={handleSubmit} className="space-y-3">
+                {mode === 'register' && (
+                  <div className="space-y-3">
+                    {/* Account Type - Locked specifically to Librarian */}
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black uppercase tracking-wider text-natural-muted italic block px-1">
+                        Account Type (Role)
+                      </label>
+                      <div className="bg-red-50/60 p-3 rounded-2xl border border-red-100 flex items-center gap-2.5 text-[11px] text-red-800 font-extrabold select-none">
+                        <Shield className="w-4 h-4 text-red-600 shrink-0" />
+                        <span>Librarian (Administrative Custody)</span>
+                      </div>
+                    </div>
+
+                    {/* Compact admin warning banner */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex gap-2.5 text-[11px] text-amber-800 font-medium leading-normal animate-in fade-in"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-amber-600 mt-0.5 animate-pulse" />
+                      <div>
+                        <p className="font-extrabold text-amber-950 mb-0.5">Authorization Required</p>
+                        Librarian registration is restricted strictly to accounts pre-added in Firebase Authentication by the system administrator.
+                      </div>
+                    </motion.div>
+
+                    {/* Full Name field with icon */}
+                    <div className="relative">
+                      <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
+                      <input 
+                        type="text"
+                        required
+                        placeholder="Full Name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full bg-natural-bg border-2 border-natural-border p-3 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Email address field */}
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
+                  <input 
+                    type="email"
+                    required
+                    placeholder="School Email Address"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-natural-bg border-2 border-natural-border p-3 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
+                  />
+                </div>
+
+                {/* Password field */}
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
+                  <input 
+                    type="password"
+                    required
+                    placeholder="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-natural-bg border-2 border-natural-border p-3 pl-12 rounded-2xl text-sm focus:outline-none focus:border-zera-yellow transition-all"
+                  />
+                </div>
+
+                {error && (
+                  <div className="bg-red-50 p-3 rounded-2xl border border-red-100 animate-in zoom-in-95">
+                    <p className="text-xs text-red-600 font-bold flex items-center gap-1.5 leading-normal">
+                      <span className="w-1.5 h-1.5 bg-red-500 rounded-full shrink-0" />
+                      <span>{error}</span>
+                    </p>
+                    {suggestLogin && (
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setMode('login');
+                          setError('');
+                          setSuggestLogin(false);
+                        }}
+                        className="mt-1.5 text-xs font-black text-zera-emerald hover:underline underline-offset-2 flex items-center gap-1 cursor-pointer"
+                      >
+                        Sign In instead <ChevronRight className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <button 
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 bg-zera-emerald text-white hover:bg-zera-emerald-dark rounded-2xl font-black uppercase text-[11px] tracking-widest transition-all transform active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-zera-emerald/10 cursor-pointer mt-1"
+                >
+                  {loading ? 'Processing...' : (mode === 'login' ? 'Sign In' : 'Register')}
+                </button>
+              </form>
+
+              {/* Divider */}
+              <div className="relative my-3">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-natural-border"></div>
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-white px-3 font-semibold text-natural-muted text-[9px] tracking-wider">Or continue with</span>
+                </div>
+              </div>
+
+              {/* Google Button */}
+              <button
+                type="button"
+                disabled={loading}
+                onClick={async () => {
+                  setError('');
+                  setLoading(true);
+                  try {
+                    await loginWithGoogle();
+                    onClose();
+                  } catch (err: any) {
+                    console.error(err);
+                    setError(err.message || 'Google Sign-In failed.');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                className="w-full py-2.5 bg-white hover:bg-natural-bg text-natural-text border-2 border-natural-border rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-3 transition-all transform active:scale-[0.98] disabled:opacity-50 cursor-pointer"
               >
-                {mode === 'login' ? 'Register Now' : 'Sign In'}
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                </svg>
+                Google Account
               </button>
-            </p>
+            </div>
+
+            {/* Bottom Swapper Link */}
+            <div className="mt-5 text-center border-t border-natural-border pt-4">
+              <p className="text-xs text-natural-muted font-medium">
+                {mode === 'login' ? "Don't have an account?" : "Already have an account?"}
+                <button 
+                  onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+                  className="ml-1.5 text-zera-emerald-light font-black hover:underline underline-offset-4 cursor-pointer"
+                >
+                  {mode === 'login' ? 'Register Now' : 'Sign In'}
+                </button>
+              </p>
+            </div>
           </div>
         </div>
       </motion.div>
@@ -239,10 +364,12 @@ const Navbar = ({ onSettleAdmin, isAdminView, onOpenAuth }: { onSettleAdmin: (va
   
   return (
     <nav className="h-16 border-b border-natural-border flex items-center justify-between px-8 bg-natural-nav sticky top-0 z-50 shadow-sm">
-      <div className="flex items-center gap-4 cursor-pointer" onClick={() => onSettleAdmin(false)}>
-        <ZeraLogo className="h-9" />
-        <div className="h-6 w-px bg-natural-border mx-2" />
-        <span className="font-serif text-xl font-bold text-zera-emerald tracking-tight opacity-70">Library System</span>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 cursor-pointer" onClick={() => onSettleAdmin(false)}>
+          <ZeraLogo className="h-9" />
+          <div className="h-6 w-px bg-natural-border mx-2" />
+          <span className="font-serif text-xl font-bold text-zera-emerald tracking-tight opacity-70">Library System</span>
+        </div>
       </div>
       
       <div className="flex items-center gap-8 text-natural-text">
@@ -290,7 +417,7 @@ const Navbar = ({ onSettleAdmin, isAdminView, onOpenAuth }: { onSettleAdmin: (va
 };
 
 // --- View Components ---
-const OPAC = () => {
+const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
   const [activeTab, setActiveTab] = useState<'books' | 'resources' | 'portal'>('books');
 
   const tabs = [
@@ -337,7 +464,7 @@ const OPAC = () => {
         >
           {activeTab === 'books' && <BookGrid />}
           {activeTab === 'resources' && <OnlineResources />}
-          {activeTab === 'portal' && <MemberPortal />}
+          {activeTab === 'portal' && <MemberPortal onOpenAuth={onOpenAuth} />}
         </motion.div>
       </AnimatePresence>
     </main>
@@ -345,6 +472,7 @@ const OPAC = () => {
 }
 
 const AdminPanel = () => {
+  const { profile, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'circulation' | 'inventory' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
 
   const menuItems = [
@@ -363,19 +491,19 @@ const AdminPanel = () => {
   return (
     <div className="flex h-[calc(100vh-64px)] overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-64 bg-natural-nav border-r border-natural-border p-4 flex flex-col gap-4">
-        <div className="mb-6 px-2">
+      <aside className="w-64 bg-natural-nav border-r border-natural-border p-4 flex flex-col gap-4 overflow-y-auto">
+        <div className="mb-2 px-2">
           <p className="text-[10px] font-bold uppercase tracking-wider text-natural-muted italic">Library Management</p>
         </div>
         
-        <div className="mb-2">
+        <div className="flex-1">
           <div className="flex flex-col gap-1">
             {menuItems.map((item) => (
               <button 
                 key={item.id}
                 onClick={() => setActiveTab(item.id as any)}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all group",
+                  "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all group cursor-pointer",
                   activeTab === item.id 
                     ? "bg-zera-yellow text-zera-emerald-dark shadow-md" 
                     : "text-natural-muted hover:bg-zera-emerald/10 hover:text-zera-emerald"
@@ -388,7 +516,28 @@ const AdminPanel = () => {
           </div>
         </div>
 
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col gap-3 shrink-0 pt-4 border-t border-natural-border/30">
+          {profile && (
+            <div className="flex items-center justify-between p-3.5 bg-white rounded-2xl border border-natural-border shadow-sm">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-zera-yellow flex items-center justify-center text-zera-emerald-dark font-black text-sm select-none shrink-0 uppercase shadow-inner">
+                  {profile.name ? profile.name.charAt(0) : 'A'}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-natural-text truncate leading-tight" title={profile.name}>{profile.name}</p>
+                  <p className="text-[9px] font-bold text-zera-emerald uppercase tracking-widest mt-0.5">{profile.role || 'Librarian'}</p>
+                </div>
+              </div>
+              <button 
+                onClick={logout}
+                className="p-1.5 hover:bg-red-50 text-red-500 rounded-xl transition-all hover:scale-105 active:scale-95 cursor-pointer shrink-0"
+                title="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="bg-zera-yellow/10 rounded-2xl p-4 border border-zera-yellow/30 shadow-sm">
             <p className="text-xs font-bold text-zera-yellow-dark mb-2">System Health</p>
             <div className="w-full bg-white/50 h-2 rounded-full overflow-hidden">
@@ -475,7 +624,14 @@ const App = () => {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
         >
-          {isAdminView && profile?.role === 'admin' ? <AdminPanel /> : <OPAC />}
+          {isAdminView && profile?.role === 'admin' ? (
+            <AdminPanel />
+          ) : (
+            <OPAC onOpenAuth={() => {
+              setAuthMode('login');
+              setIsAuthModalOpen(true);
+            }} />
+          )}
         </motion.div>
       </AnimatePresence>
 

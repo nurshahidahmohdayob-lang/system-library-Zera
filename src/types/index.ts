@@ -14,6 +14,11 @@ export interface UserProfile {
   phoneNumber?: string;
   status?: string;
   createdAt?: string;
+  cohort?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  syncSource?: string;
+  lastSyncedAt?: string;
 }
 
 export interface Book {

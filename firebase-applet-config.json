@@ -1,10 +1,10 @@
 {
-  "projectId": "pacific-caster-9cf5x",
-  "appId": "1:317998293912:web:50b38abc12e9315c7781ed",
-  "apiKey": "AIzaSyBmug8cYrAFhDexorah30jodF0lWP9DIRM",
-  "authDomain": "pacific-caster-9cf5x.firebaseapp.com",
+  "projectId": "zera-library-system",
+  "appId": "1:960573330177:web:f8a992f24df604b2364100",
+  "apiKey": "AIzaSyD8XTdw8VRf2lNyNM4FXnf-elL0CP4wFCg",
+  "authDomain": "zera-library-system.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-8fcb1934-b92d-4443-adc1-2677b6a7902c",
-  "storageBucket": "pacific-caster-9cf5x.firebasestorage.app",
-  "messagingSenderId": "317998293912",
+  "storageBucket": "zera-library-system.firebasestorage.app",
+  "messagingSenderId": "960573330177",
   "measurementId": ""
 }

@@ -25,6 +25,7 @@ import {
   Library,
   Search,
   ChevronRight,
+  ChevronLeft,
   Trash2,
   BookOpen,
   Archive,
@@ -37,6 +38,8 @@ import {
 import { cn } from '@/src/lib/utils';
 import { format } from 'date-fns';
 import { BarcodeService, BarcodeType } from '@/src/services/BarcodeService';
+import { StudentSync } from '@/src/components/admin/StudentSync';
+import { StaffSync } from '@/src/components/admin/StaffSync';
 
 interface UserManagementProps {
   roleFilter?: 'student' | 'teacher';
@@ -77,6 +80,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) => {
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
   const [isAdding, setIsAdding] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
@@ -84,6 +89,10 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [roleFilter, searchTerm]);
   
   const [newUser, setNewUser] = useState<Partial<UserProfile>>({
     name: '',
@@ -135,7 +144,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
     const q = query(collection(db, 'users'), orderBy('name'));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allMembers = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile));
+      const allMembers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile));
       // filter in-memory
       const filtered = allMembers.filter(u => {
         const matchesRole = roleFilter ? u.role === roleFilter : true;
@@ -277,6 +286,11 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
     }
   };
 
+  const indexOfLastUser = currentPage * ITEMS_PER_PAGE;
+  const indexOfFirstUser = indexOfLastUser - ITEMS_PER_PAGE;
+  const currentUsers = users.slice(indexOfFirstUser, indexOfLastUser);
+  const totalPages = Math.ceil(users.length / ITEMS_PER_PAGE);
+
   return (
     <div className="space-y-8 pb-20">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-natural-border pb-8">
@@ -325,6 +339,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
           {isAdding ? 'Cancel' : `Add New ${roleFilter ? roleFilter.charAt(0).toUpperCase() + roleFilter.slice(1) : 'Member'}`}
         </button>
       </div>
+
+      {roleFilter === 'student' && <StudentSync />}
+      {roleFilter === 'teacher' && <StaffSync />}
 
       {isAdding && (
         <form onSubmit={handleSave} className="p-8 bg-white border-2 border-zera-emerald/30 rounded-[40px] shadow-lg grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in slide-in-from-top-4">
@@ -475,6 +492,31 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                       <span className="text-sm font-bold text-natural-text">{selectedUser.department}</span>
                     </div>
                   )}
+                  
+                  {selectedUser.cohort && (
+                    <div className="flex items-center gap-3 pt-1 border-t border-natural-border/30">
+                      <span className="text-[10px] text-natural-muted font-black uppercase tracking-wider w-16 shrink-0">Cohort</span>
+                      <span className="text-xs font-black text-natural-text bg-natural-bg px-2.5 py-1 rounded-lg border border-natural-border">{selectedUser.cohort}</span>
+                    </div>
+                  )}
+                  {selectedUser.dateOfBirth && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-natural-muted font-black uppercase tracking-wider w-16 shrink-0">DOB</span>
+                      <span className="text-xs font-black text-natural-text bg-natural-bg px-2.5 py-1 rounded-lg border border-natural-border">{selectedUser.dateOfBirth}</span>
+                    </div>
+                  )}
+                  {selectedUser.gender && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-natural-muted font-black uppercase tracking-wider w-16 shrink-0">Gender</span>
+                      <span className="text-xs font-black text-natural-text bg-natural-bg px-2.5 py-1 rounded-lg border border-natural-border capitalize">{selectedUser.gender}</span>
+                    </div>
+                  )}
+                  {selectedUser.syncSource && (
+                    <div className="pt-2.5 border-t border-natural-border/60 flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-zera-emerald rounded-full animate-pulse shrink-0" />
+                      <span className="text-[9px] text-zera-emerald font-black uppercase tracking-widest leading-none">Synced Profile • {selectedUser.syncSource}</span>
+                    </div>
+                  )}
                 </div>
 
                 <button 
@@ -534,77 +576,109 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
            <UserIcon className="absolute -left-12 -bottom-12 w-64 h-64 text-zera-emerald opacity-5 pointer-events-none" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {users.map(user => (
-            <div 
-              key={user.uid} 
-              onClick={() => viewUserDetail(user)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  viewUserDetail(user);
-                }
-              }}
-              role="button"
-              tabIndex={0}
-              className="bg-white border border-natural-border rounded-[32px] p-6 shadow-sm hover:shadow-xl transition-all flex flex-col gap-6 text-left group relative overflow-hidden cursor-pointer focus:ring-2 focus:ring-zera-yellow outline-none"
-            >
-              <div className="flex gap-4 items-center relative z-10 pointer-events-none">
-                <div className="w-14 h-14 bg-natural-bg rounded-2xl flex items-center justify-center text-natural-muted group-hover:bg-zera-emerald group-hover:text-white transition-all border border-natural-border shadow-inner">
-                  <UserIcon className="w-7 h-7" />
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {currentUsers.map(user => (
+              <div 
+                key={user.uid} 
+                onClick={() => viewUserDetail(user)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    viewUserDetail(user);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                className="bg-white border border-natural-border rounded-[32px] p-6 shadow-sm hover:shadow-xl transition-all flex flex-col gap-6 text-left group relative overflow-hidden cursor-pointer focus:ring-2 focus:ring-zera-yellow outline-none"
+              >
+                <div className="flex gap-4 items-center relative z-10 pointer-events-none">
+                  <div className="w-14 h-14 bg-natural-bg rounded-2xl flex items-center justify-center text-natural-muted group-hover:bg-zera-emerald group-hover:text-white transition-all border border-natural-border shadow-inner">
+                    <UserIcon className="w-7 h-7" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-black text-natural-text leading-tight group-hover:text-zera-emerald transition-colors truncate">{user.name}</p>
+                    <p className="text-[9px] font-black text-zera-emerald uppercase tracking-[0.2em] mt-1">{user.role}</p>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-natural-text leading-tight group-hover:text-zera-emerald transition-colors truncate">{user.name}</p>
-                  <p className="text-[9px] font-black text-zera-emerald uppercase tracking-[0.2em] mt-1">{user.role}</p>
-                </div>
-              </div>
 
-              <div className="flex flex-col gap-3 relative z-10 pointer-events-none">
-                <div className="flex items-center gap-2 text-[11px] font-bold text-natural-muted group-hover:text-natural-text transition-colors">
-                  <Mail className="w-3.5 h-3.5" />
-                  <span className="truncate">{user.email}</span>
+                <div className="flex flex-col gap-3 relative z-10 pointer-events-none">
+                  <div className="flex items-center gap-2 text-[11px] font-bold text-natural-muted group-hover:text-natural-text transition-colors">
+                    <Mail className="w-3.5 h-3.5" />
+                    <span className="truncate">{user.email}</span>
+                  </div>
+                  <div className="flex justify-between items-end mt-2">
+                     <div className="flex gap-2">
+                       {user.grade && (
+                         <span className="text-[9px] px-2 py-0.5 bg-zera-emerald/10 text-zera-emerald border border-zera-emerald/20 rounded font-black uppercase">G{user.grade}</span>
+                       )}
+                       {user.department && (
+                         <span className="text-[9px] px-2 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded font-black uppercase">{user.department}</span>
+                       )}
+                     </div>
+                     <div className="flex items-center gap-1.5 text-zera-emerald">
+                        <span className="text-xs font-black">{user.activeLoansCount || 0}</span>
+                        <BookOpen className="w-3.5 h-3.5 opacity-40" />
+                     </div>
+                  </div>
                 </div>
-                <div className="flex justify-between items-end mt-2">
-                   <div className="flex gap-2">
-                     {user.grade && (
-                       <span className="text-[9px] px-2 py-0.5 bg-zera-emerald/10 text-zera-emerald border border-zera-emerald/20 rounded font-black uppercase">G{user.grade}</span>
-                     )}
-                     {user.department && (
-                       <span className="text-[9px] px-2 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded font-black uppercase">{user.department}</span>
-                     )}
-                   </div>
-                   <div className="flex items-center gap-1.5 text-zera-emerald">
-                      <span className="text-xs font-black">{user.activeLoansCount || 0}</span>
-                      <BookOpen className="w-3.5 h-3.5 opacity-40" />
+                
+                <div className="absolute top-4 right-4 flex gap-2">
+                   <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit(user);
+                    }}
+                    className="p-2 bg-white/80 rounded-xl hover:bg-zera-yellow hover:text-zera-emerald-dark transition-all shadow-sm opacity-0 group-hover:opacity-100 border border-natural-border z-20"
+                    title="Edit Record"
+                  >
+                     <Edit2 className="w-4 h-4" />
+                   </button>
+                   <button 
+                    onClick={(e) => deleteMember(user.uid, e)}
+                    disabled={saving}
+                    className="p-2 bg-white/80 rounded-xl hover:bg-red-500 hover:text-white transition-all shadow-sm opacity-0 group-hover:opacity-100 border border-natural-border z-20 disabled:opacity-50"
+                    title="Delete Record"
+                  >
+                     <Trash2 className={cn("w-4 h-4", saving && confirmDeleteId === user.uid && "animate-spin")} />
+                   </button>
+                   <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ChevronRight className="w-6 h-6 text-zera-emerald" />
                    </div>
                 </div>
               </div>
+            ))}
+          </div>
+
+          {/* Pagination Component */}
+          {totalPages > 1 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between bg-white border border-natural-border px-6 py-4 rounded-[28px] shadow-sm gap-4 mt-4 select-none">
+              <button
+                type="button"
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-natural-text border-2 border-natural-border rounded-2xl hover:bg-natural-bg disabled:opacity-30 disabled:hover:bg-transparent transition-all cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Previous
+              </button>
               
-              <div className="absolute top-4 right-4 flex gap-2">
-                 <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEdit(user);
-                  }}
-                  className="p-2 bg-white/80 rounded-xl hover:bg-zera-yellow hover:text-zera-emerald-dark transition-all shadow-sm opacity-0 group-hover:opacity-100 border border-natural-border z-20"
-                  title="Edit Record"
-                >
-                   <Edit2 className="w-4 h-4" />
-                 </button>
-                 <button 
-                  onClick={(e) => deleteMember(user.uid, e)}
-                  disabled={saving}
-                  className="p-2 bg-white/80 rounded-xl hover:bg-red-500 hover:text-white transition-all shadow-sm opacity-0 group-hover:opacity-100 border border-natural-border z-20 disabled:opacity-50"
-                  title="Delete Record"
-                >
-                   <Trash2 className={cn("w-4 h-4", saving && confirmDeleteId === user.uid && "animate-spin")} />
-                 </button>
-                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    <ChevronRight className="w-6 h-6 text-zera-emerald" />
-                 </div>
-              </div>
+              <span className="text-xs font-black text-natural-muted uppercase tracking-wider text-center">
+                Page <span className="text-zera-emerald font-black text-sm px-1">{currentPage}</span> of <span className="text-natural-text font-black">{totalPages}</span>
+                <span className="text-[10px] text-natural-muted/60 block sm:inline sm:ml-2">({users.length} total profiles)</span>
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-natural-text border-2 border-natural-border rounded-2xl hover:bg-natural-bg disabled:opacity-30 disabled:hover:bg-transparent transition-all cursor-pointer"
+              >
+                Next
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
-          ))}
+          )}
         </div>
       )}
 

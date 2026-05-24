@@ -108,7 +108,7 @@ export const CirculationDashboard = () => {
     const fetchUsers = async () => {
       const q = query(collection(db, 'users'), limit(100));
       const snapshot = await getDocs(q);
-      setUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile)));
+      setUsers(snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile)));
     };
     fetchUsers();
   }, []);
@@ -307,9 +307,9 @@ export const CirculationDashboard = () => {
 
                {filteredUsers.length > 0 && (
                  <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-natural-border rounded-2xl shadow-xl z-20 max-h-48 overflow-y-auto divide-y divide-natural-bg">
-                    {filteredUsers.map(user => (
+                    {filteredUsers.map((user, idx) => (
                       <button 
-                        key={user.uid}
+                        key={`${user.uid || ''}-${idx}`}
                         onClick={() => selectUser(user)}
                         className="w-full p-4 flex items-center gap-3 hover:bg-zera-emerald/5 transition-colors text-left"
                       >

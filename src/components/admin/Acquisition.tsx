@@ -18,6 +18,7 @@ import { cn } from '@/src/lib/utils';
 import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
+import { useAuth } from '@/src/hooks/useAuth';
 
 interface AcquisitionItem {
   id: string;
@@ -33,6 +34,7 @@ interface AcquisitionItem {
 }
 
 export const Acquisition: React.FC = () => {
+  const { profile } = useAuth();
   const [items, setItems] = useState<AcquisitionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -102,11 +104,13 @@ export const Acquisition: React.FC = () => {
       if (editingItem) {
         await updateDoc(doc(db, 'acquisitions', editingItem.id), {
           ...formData,
+          requestedBy: formData.requestedBy || profile?.uid || '',
           updatedAt: serverTimestamp()
         });
       } else {
         await addDoc(collection(db, 'acquisitions'), {
           ...formData,
+          requestedBy: profile?.uid || '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });

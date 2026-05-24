@@ -174,7 +174,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({ title, data, columns, onClo
               {filteredData.map((item, idx) => {
                 const isEditing = editingId === item.id;
                 return (
-                  <tr key={item.id || idx} className="hover:bg-natural-bg/50 transition-colors group">
+                  <tr key={`${item.id || ''}-${idx}`} className="hover:bg-natural-bg/50 transition-colors group">
                     {columns.map(col => (
                       <td key={col.key} className="px-4 py-4 text-sm font-medium text-natural-text">
                         {isEditing ? (
