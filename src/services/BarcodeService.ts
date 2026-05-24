@@ -1,4 +1,4 @@
-import { doc, runTransaction, getDoc, setDoc } from 'firebase/firestore';
+import { doc, runTransaction, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 
 export type BarcodeType = 'book' | 'student' | 'staff';
@@ -16,11 +16,78 @@ export class BarcodeService {
     }
   }
 
+  private static async findLowestUnusedBarcode(type: BarcodeType): Promise<string> {
+    const prefix = this.getPrefix(type);
+    const usedNumbers = new Set<number>();
+
+    try {
+      if (type === 'student' || type === 'staff') {
+        const role = type === 'student' ? 'student' : 'teacher';
+        const q = query(
+          collection(db, 'users'),
+          where('role', '==', role)
+        );
+        const snap = await getDocs(q);
+        snap.docs.forEach(docSnap => {
+          const barcode = docSnap.data().barcode;
+          if (barcode && typeof barcode === 'string' && barcode.startsWith(prefix)) {
+            const numPart = barcode.substring(prefix.length);
+            const num = parseInt(numPart, 10);
+            if (!isNaN(num)) {
+              usedNumbers.add(num);
+            }
+          }
+        });
+      } else {
+        const snap = await getDocs(collection(db, 'books'));
+        snap.docs.forEach(docSnap => {
+          const barcode = docSnap.data().barcode;
+          if (barcode && typeof barcode === 'string' && barcode.startsWith(prefix)) {
+            const numPart = barcode.substring(prefix.length);
+            const num = parseInt(numPart, 10);
+            if (!isNaN(num)) {
+              usedNumbers.add(num);
+            }
+          }
+        });
+      }
+    } catch (err) {
+      console.error("Error checking existing barcodes from DB:", err);
+    }
+
+    let nextValue = 1;
+    while (usedNumbers.has(nextValue)) {
+      nextValue++;
+    }
+
+    const paddedNumber = nextValue.toString().padStart(2, '0');
+    return `${prefix}${paddedNumber}`;
+  }
+
   /**
    * Generates the next available barcode for a specific type.
-   * Increments the counter in Firestore atomically.
+   * For student/staff, scans live to find lowest unused.
+   * For book, increments the counter in Firestore atomically.
    */
   static async generateNextBarcode(type: BarcodeType = 'book'): Promise<string> {
+    if (type === 'student' || type === 'staff') {
+      const nextBarcode = await this.findLowestUnusedBarcode(type);
+      
+      // Update counter document as fallback/legacy tracking
+      try {
+        const counterRef = doc(db, this.getCounterPath(type));
+        const numPart = nextBarcode.substring(this.getPrefix(type).length);
+        const nextValue = parseInt(numPart, 10);
+        if (!isNaN(nextValue)) {
+          await setDoc(counterRef, { value: nextValue }, { merge: true });
+        }
+      } catch (e) {
+        console.warn("Could not update legacy counter:", e);
+      }
+      
+      return nextBarcode;
+    }
+
     const counterRef = doc(db, this.getCounterPath(type));
     const prefix = this.getPrefix(type);
 
@@ -50,6 +117,10 @@ export class BarcodeService {
    * Peeks at the next barcode without incrementing.
    */
   static async peekNextBarcode(type: BarcodeType = 'book'): Promise<string> {
+    if (type === 'student' || type === 'staff') {
+      return await this.findLowestUnusedBarcode(type);
+    }
+
     const counterRef = doc(db, this.getCounterPath(type));
     const prefix = this.getPrefix(type);
     const counterDoc = await getDoc(counterRef);
