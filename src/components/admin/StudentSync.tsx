@@ -243,7 +243,6 @@ export const StudentSync: React.FC = () => {
   const [useEmulator, setUseEmulator] = useState<boolean>(false);
   const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
   const [apiKey, setApiKey] = useState<string>('22|TApEAT8FlLmQw60Oy4Q4Ki9q1S0aRR3fimVs4tT34044fa2e');
-  const [autoSync, setAutoSync] = useState<boolean>(true);
   const [showConfig, setShowConfig] = useState<boolean>(false);
   
   // Realtime Status Details
@@ -263,7 +262,6 @@ export const StudentSync: React.FC = () => {
     const savedEmulator = localStorage.getItem('zera_students_api_use_emulator');
     const savedBaseUrl = localStorage.getItem('zera_students_api_base_url');
     const savedApiKey = localStorage.getItem('zera_students_api_key');
-    const savedAutoSync = localStorage.getItem('zera_students_api_auto_sync');
     const savedLastSync = localStorage.getItem('zera_students_api_last_sync_time');
 
     if (savedEmulator !== null) {
@@ -283,22 +281,7 @@ export const StudentSync: React.FC = () => {
       localStorage.setItem('zera_students_api_key', '22|TApEAT8FlLmQw60Oy4Q4Ki9q1S0aRR3fimVs4tT34044fa2e');
     }
 
-    if (savedAutoSync !== null) setAutoSync(savedAutoSync === 'true');
     if (savedLastSync !== null) setLastSyncDate(new Date(parseInt(savedLastSync, 10)));
-
-    // Lazy Trigger: Weekly Auto-Sync (if > 7 days have passed)
-    if (savedAutoSync === 'true' || savedAutoSync === null) {
-      const lastTime = savedLastSync ? parseInt(savedLastSync, 10) : 0;
-      const oneWeekInMs = 7 * 24 * 60 * 60 * 1000;
-      if (Date.now() - lastTime > oneWeekInMs) {
-        console.log("Weekly Auto-Sync triggered (Lazy Background check).");
-        // Defer start slightly so UI handles it comfortably
-        const timer = setTimeout(() => {
-          performSync(savedEmulator !== 'false', savedBaseUrl || '', savedApiKey || '');
-        }, 1500);
-        return () => clearTimeout(timer);
-      }
-    }
 
     // Passive clean up of mock student accounts having 'ST-' prefix
     const cleanupMockStudents = async () => {
@@ -325,7 +308,6 @@ export const StudentSync: React.FC = () => {
     localStorage.setItem('zera_students_api_use_emulator', String(useEmulator));
     localStorage.setItem('zera_students_api_base_url', apiBaseUrl);
     localStorage.setItem('zera_students_api_key', apiKey);
-    localStorage.setItem('zera_students_api_auto_sync', String(autoSync));
     setShowConfig(false);
   };
 
@@ -655,13 +637,7 @@ export const StudentSync: React.FC = () => {
             
             <span className="flex items-center gap-1.5 bg-natural-bg px-2.5 py-1 rounded-lg border border-natural-border">
               <Calendar className="w-3.5 h-3.5 text-natural-muted" />
-              Weekly Auto-Sync: 
-              <span className={cn(
-                "font-black uppercase text-[10px] tracking-wide",
-                autoSync ? "text-zera-emerald" : "text-amber-600"
-              )}>
-                {autoSync ? "Enabled" : "Disabled"}
-              </span>
+              Sync Mode: <span className="font-black text-zera-emerald uppercase text-[10px] tracking-wide">Strictly Manual (Routine/Action)</span>
             </span>
 
             {lastSyncDate && (
@@ -735,14 +711,11 @@ export const StudentSync: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between bg-white p-3 rounded-2xl border border-natural-border">
-                  <span className="text-xs font-black text-natural-text">Enable Weekly background Auto-Sync</span>
-                  <input 
-                    type="checkbox" 
-                    checked={autoSync}
-                    onChange={(e) => setAutoSync(e.target.checked)}
-                    className="w-4 h-4 outline-none accent-zera-emerald"
-                  />
+                <div className="flex flex-col gap-1.5 bg-white p-4 rounded-2xl border border-natural-border">
+                  <span className="text-xs font-black text-natural-text">Manual Action-Driven Pipeline Only</span>
+                  <span className="text-[10px] font-bold text-natural-muted leading-relaxed">
+                    Automated background timers and idle sync-on-mount triggers have been disabled to prevent overwriting of library records during concurrent administrator sessions. Directory updates will execute strictly upon clicking "Sync Directory".
+                  </span>
                 </div>
               </div>
 

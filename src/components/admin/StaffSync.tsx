@@ -273,7 +273,6 @@ export const StaffSync: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('23|IUgdvUdK3yUfa7IFGy3FC5ZkWAYc4E5uYYDTyTqV544970de');
-  const [autoSync, setAutoSync] = useState(true);
   
   const [syncLogs, setSyncLogs] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -291,13 +290,11 @@ export const StaffSync: React.FC = () => {
     const storedBase = localStorage.getItem('zera_staff_api_base');
     const storedKey = localStorage.getItem('zera_staff_api_key');
     const storedEmu = localStorage.getItem('zera_staff_api_use_emulator');
-    const storedAuto = localStorage.getItem('zera_staff_api_auto_sync');
     const storedLastTime = localStorage.getItem('zera_staff_api_last_sync_time');
     
     if (storedBase) setApiBaseUrl(storedBase);
     if (storedKey) setApiKey(storedKey);
     if (storedEmu) setUseEmulator(storedEmu === 'true');
-    if (storedAuto) setAutoSync(storedAuto === 'true');
     if (storedLastTime) setLastSyncDate(new Date(parseInt(storedLastTime, 10)));
 
     // Passive clean up of mock teacher accounts having 'SF-' prefix
@@ -330,7 +327,6 @@ export const StaffSync: React.FC = () => {
     localStorage.setItem('zera_staff_api_base', apiBaseUrl);
     localStorage.setItem('zera_staff_api_key', apiKey);
     localStorage.setItem('zera_staff_api_use_emulator', String(useEmulator));
-    localStorage.setItem('zera_staff_api_auto_sync', String(autoSync));
     setShowConfig(false);
     addLog("✓ Synchronization channel configuration successfully saved locally.");
   };
@@ -648,13 +644,7 @@ export const StaffSync: React.FC = () => {
             
             <span className="flex items-center gap-1.5 bg-natural-bg px-2.5 py-1 rounded-lg border border-natural-border">
               <Calendar className="w-3.5 h-3.5 text-natural-muted" />
-              Weekly Auto-Sync: 
-              <span className={cn(
-                "font-black uppercase text-[10px] tracking-wide",
-                autoSync ? "text-zera-emerald" : "text-amber-600"
-              )}>
-                {autoSync ? "Enabled" : "Disabled"}
-              </span>
+              Sync Mode: <span className="font-black text-zera-emerald uppercase text-[10px] tracking-wide">Strictly Manual (Routine/Action)</span>
             </span>
 
             {lastSyncDate && (
@@ -727,14 +717,11 @@ export const StaffSync: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between bg-white p-3 rounded-2xl border border-natural-border">
-                  <span className="text-xs font-black text-natural-text">Enable Weekly background Auto-Sync</span>
-                  <input 
-                    type="checkbox" 
-                    checked={autoSync}
-                    onChange={(e) => setAutoSync(e.target.checked)}
-                    className="w-4 h-4 outline-none accent-zera-emerald"
-                  />
+                <div className="flex flex-col gap-1.5 bg-white p-4 rounded-2xl border border-natural-border">
+                  <span className="text-xs font-black text-natural-text">Manual Action-Driven Pipeline Only</span>
+                  <span className="text-[10px] font-bold text-natural-muted leading-relaxed">
+                    Automated background timers and idle sync-on-mount triggers have been disabled to prevent overwriting of library records during concurrent administrator sessions. Directory updates will execute strictly upon clicking "Sync Directory".
+                  </span>
                 </div>
               </div>
 
