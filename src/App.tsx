@@ -430,11 +430,20 @@ const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
 
   return (
     <main className="max-w-7xl mx-auto px-6 py-12 min-h-[calc(100vh-104px)]">
-      <div className="text-center mb-16 space-y-2 animate-in fade-in duration-700">
-         <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-zera-yellow-dark">Zera Education</h2>
-         <h1 className="text-4xl font-serif font-black text-zera-emerald tracking-tight">Institutional Knowledge Archive</h1>
-         <p className="text-xs text-natural-muted font-bold tracking-wide italic mt-2">"From a seed to a mighty tree." • Finest education for all.</p>
-         <div className="w-12 h-1 bg-zera-yellow mx-auto mt-4 rounded-full"></div>
+      <div className="text-center mb-16 space-y-4 animate-in fade-in duration-700">
+         <div className="flex flex-col md:flex-row items-center justify-center gap-x-6 gap-y-3">
+            <h1 className="text-5xl md:text-6xl lg:text-7xl font-serif font-black text-zera-emerald tracking-tight leading-none">
+              Zera Education
+            </h1>
+            <div className="hidden md:block w-1 h-14 bg-zera-yellow rounded-full shrink-0" />
+            <h2 className="text-xl md:text-2xl lg:text-3xl font-serif font-black text-zera-yellow-dark tracking-wide uppercase max-w-xs md:text-left leading-tight">
+              Institutional Knowledge Archive
+            </h2>
+         </div>
+         <p className="text-sm text-natural-muted font-medium tracking-wide italic mt-4 max-w-lg mx-auto leading-relaxed">
+           "From a seed to a mighty tree." <span className="mx-2 text-natural-border/60">•</span> Finest education for all.
+         </p>
+         <div className="w-16 h-1 bg-zera-yellow mx-auto mt-6 rounded-full"></div>
       </div>
 
       <div className="flex justify-center mb-16">
