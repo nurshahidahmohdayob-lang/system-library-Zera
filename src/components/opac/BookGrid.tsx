@@ -204,7 +204,7 @@ export const BookGrid = () => {
                 <div className="space-y-3">
                    <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-natural-muted mb-1">Abstract</h4>
                    <p className="text-natural-text font-serif leading-relaxed text-base line-clamp-4">
-                     {selectedBook.description || `Institutional asset for Zera International School.`}
+                     {selectedBook.description || `Institutional asset for Zera Education.`}
                    </p>
                 </div>
 

@@ -1,23 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
 @import "tailwindcss";
 
 @theme {
+  --font-sans: "DM Sans", "Oakes Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+
   --color-natural-bg: #FCFAF7;
-  --color-natural-text: #1F2937;
+  --color-natural-text: #0D0D0D; /* Ink Black #0D0D0D from Brand Kit */
   --color-natural-nav: #FFFFFF;
-  --color-natural-border: #E5E7EB;
+  --color-natural-border: #DFDFE7; /* Silver #DFDFE7 from Brand Kit */
   --color-natural-muted: #6B7280;
   
-  /* Zera School Colors */
-  --color-zera-emerald: #064E3B; /* Dark Emerald */
+  /* Zera School Colors default pointing to main Edu brand */
+  --color-zera-emerald: #0A4F29; /* Zera Education Main Color #0A4F29 */
   --color-zera-emerald-dark: #022C22;
-  --color-zera-emerald-light: #059669;
-  --color-zera-yellow: #FBBF24; /* School Yellow */
+  --color-zera-emerald-light: #3A7A5E; /* Zera Pre */
+  --color-zera-yellow: #F7B917; /* Zera Music / Accent Yellow #F7B917 */
   --color-zera-yellow-dark: #B45309;
   --color-zera-rust: #EF4444;
 
-  /* Legacy mappings for components already using natural-* prefix */
-  --color-natural-sage: #064E3B;
-  --color-natural-sage-light: #FBBF24;
+  /* Custom Sub-brand colors from PDF & Web specifications */
+  --color-zera-edu: #0A4F29;
+  --color-zera-intl: #668C4A;
+  --color-zera-pre: #3A7A5E;
+  --color-zera-plus: #27829E;
+  --color-zera-music: #F7B917;
+
+  /* Legacy mappings */
+  --color-natural-sage: #0A4F29;
+  --color-natural-sage-light: #F7B917;
   --color-natural-rust: #EF4444;
 }
 

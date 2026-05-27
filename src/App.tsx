@@ -33,6 +33,7 @@ import { cn } from '@/src/lib/utils';
 
 import { BookGrid } from '@/src/components/opac/BookGrid';
 import { MemberPortal } from '@/src/components/opac/MemberPortal';
+import { BrandCharter } from '@/src/components/opac/BrandCharter';
 import { CatalogManager } from '@/src/components/admin/CatalogManager';
 import { UserManagement } from '@/src/components/admin/UserManagement';
 import { CirculationDashboard } from '@/src/components/admin/CirculationDashboard';
@@ -354,7 +355,7 @@ const ZeraLogo = ({ className }: { className?: string }) => {
   return (
     <div className={cn("flex flex-col", className)}>
       <span className="font-serif text-2xl font-black text-zera-emerald leading-none tracking-tighter uppercase">zera</span>
-      <span className="text-[9px] font-bold text-zera-emerald-light uppercase tracking-[0.2em] -mt-1 whitespace-nowrap">International School</span>
+      <span className="text-[9px] font-bold text-zera-emerald-light uppercase tracking-[0.2em] -mt-1 whitespace-nowrap">Education</span>
     </div>
   );
 };
@@ -418,19 +419,21 @@ const Navbar = ({ onSettleAdmin, isAdminView, onOpenAuth }: { onSettleAdmin: (va
 
 // --- View Components ---
 const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
-  const [activeTab, setActiveTab] = useState<'books' | 'resources' | 'portal'>('books');
+  const [activeTab, setActiveTab] = useState<'books' | 'resources' | 'charter' | 'portal'>('books');
 
   const tabs = [
     { id: 'books', label: 'Physical Library', icon: BookIcon },
     { id: 'resources', label: 'Digital Resources', icon: Globe },
+    { id: 'charter', label: 'School Charter', icon: GraduationCap },
     { id: 'portal', label: 'Member Portal', icon: User },
   ];
 
   return (
     <main className="max-w-7xl mx-auto px-6 py-12 min-h-[calc(100vh-104px)]">
-      <div className="text-center mb-16 space-y-2">
-         <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-zera-yellow-dark">Zera International School</h2>
+      <div className="text-center mb-16 space-y-2 animate-in fade-in duration-700">
+         <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-zera-yellow-dark">Zera Education</h2>
          <h1 className="text-4xl font-serif font-black text-zera-emerald tracking-tight">Institutional Knowledge Archive</h1>
+         <p className="text-xs text-natural-muted font-bold tracking-wide italic mt-2">"From a seed to a mighty tree." • Finest education for all.</p>
          <div className="w-12 h-1 bg-zera-yellow mx-auto mt-4 rounded-full"></div>
       </div>
 
@@ -464,6 +467,7 @@ const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
         >
           {activeTab === 'books' && <BookGrid />}
           {activeTab === 'resources' && <OnlineResources />}
+          {activeTab === 'charter' && <BrandCharter />}
           {activeTab === 'portal' && <MemberPortal onOpenAuth={onOpenAuth} />}
         </motion.div>
       </AnimatePresence>
@@ -644,7 +648,7 @@ const App = () => {
       <footer className="h-10 bg-zera-emerald px-8 flex items-center justify-between text-white text-[11px] font-bold sticky bottom-0 z-50">
         <div className="flex gap-6">
           <span>Version 4.2.1-stable</span>
-          <span>© Zera International School</span>
+          <span>© Zera Education System</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 bg-zera-yellow rounded-full animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.8)]"></div>

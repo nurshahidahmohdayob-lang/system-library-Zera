@@ -261,7 +261,7 @@ export const CirculationDashboard = () => {
     <div className="space-y-8 pb-20">
       <div>
         <h2 className="font-serif text-3xl font-bold text-natural-text">Circulation Desk</h2>
-        <p className="text-sm text-natural-muted font-medium italic">Zera International Institutional Lending Management</p>
+        <p className="text-sm text-natural-muted font-medium italic">Zera Education Institutional Lending Management</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

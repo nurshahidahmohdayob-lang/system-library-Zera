@@ -296,7 +296,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-natural-border pb-8">
         <div className="flex-1">
           <h2 className="font-serif text-3xl font-bold text-natural-text capitalize">{roleFilter ? `${roleFilter}s` : 'Member'} Directory</h2>
-          <p className="text-sm text-natural-muted font-medium italic">Zera International Registered Faculty & Students</p>
+          <p className="text-sm text-natural-muted font-medium italic">Zera Education Registered Faculty & Students</p>
           
           <div className="mt-6 relative max-w-md group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-muted group-focus-within:text-zera-emerald transition-colors" />

@@ -1,6 +1,6 @@
 {
   "name": "Remix: Zera International Library System",
-  "description": "Professional library management system for Zera International School, featuring advanced circulation, cataloging with Z39.50 lookup, and automated reporting.",
+  "description": "Professional library system for Zera Education, featuring active circulation desk, cataloging with Z39.50 metadata lookup, detailed reporting, and full alignment with the 2024 Zera Brand Kit standards.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

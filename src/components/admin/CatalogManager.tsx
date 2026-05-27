@@ -193,7 +193,7 @@ export const CatalogManager = () => {
         <div>
           <h2 className="font-serif text-3xl font-bold text-natural-text">Catalogue Management</h2>
           <div className="flex items-center gap-2 mt-1">
-            <p className="text-sm text-natural-muted font-medium italic">Zera International Library System</p>
+            <p className="text-sm text-natural-muted font-medium italic">Zera Education Library System</p>
             <div className="flex items-center gap-1.5 px-2 py-0.5 bg-zera-emerald/10 rounded-full border border-zera-emerald/20 shadow-inner">
               <div className="w-1.5 h-1.5 bg-zera-emerald rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
               <span className="text-[10px] font-black text-zera-emerald uppercase tracking-widest">Active Z39.50 Connection</span>
