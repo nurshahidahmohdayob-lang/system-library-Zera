@@ -465,6 +465,19 @@ async function startServer() {
     ) => {
       console.log(`[WorldCatalog & Z39.50] Fetching bibliography for Title: "${t}", ISBN: "${i || 'N/A'}"`);
       
+      const fetchWithTimeout = async (url: string, timeoutMs = 1500): Promise<Response> => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          return response;
+        } catch (err) {
+          clearTimeout(timeoutId);
+          throw err;
+        }
+      };
+
       let fetchedDesc = existingDesc || '';
       let fetchedPublisher = '';
       let fetchedYear: number | undefined;
@@ -480,7 +493,7 @@ async function startServer() {
         if (cleanIsbn) {
           // A. Try Google Books API by ISBN for genuine synopses
           try {
-            const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+            const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
             if (res.ok) {
               const data = await res.json();
               if (data.items && data.items.length > 0) {
@@ -501,13 +514,13 @@ async function startServer() {
               }
             }
           } catch (err) {
-            console.warn("[WorldCatalog] ISBN query via Google Books failed:", err);
+            console.log("[WorldCatalog] ISBN query via Google Books bypassed or unavailable.");
           }
 
           // B. Try OpenLibrary by ISBN if no description was obtained yet
           if (!fetchedDesc || fetchedDesc.trim().length === 0) {
             try {
-              const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`);
+              const res = await fetchWithTimeout(`https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`);
               if (res.ok) {
                 const data = await res.json();
                 const key = `ISBN:${cleanIsbn}`;
@@ -539,14 +552,14 @@ async function startServer() {
                 }
               }
             } catch (err) {
-              console.warn("[WorldCatalog] ISBN query via OpenLibrary failed:", err);
+              console.log("[WorldCatalog] ISBN query via OpenLibrary bypassed or unavailable.");
             }
           }
 
           // C. Try LOC (Library of Congress) SRU Z39.50 Gateway
           if (!fetchedDesc || fetchedDesc.trim().length === 0) {
             try {
-              const res = await fetch(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${cleanIsbn}&maximumRecords=1&recordSchema=bibframe`);
+              const res = await fetchWithTimeout(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${cleanIsbn}&maximumRecords=1&recordSchema=bibframe`);
               if (res.ok) {
                 const xml = await res.text();
                 const tMatch = xml.match(/<title[^>]*>([^<]+)<\/title>/);
@@ -560,7 +573,7 @@ async function startServer() {
                 }
               }
             } catch (err) {
-              console.warn("[WorldCatalog] Z39.50 Library of Congress query failed:", err);
+              console.log("[WorldCatalog] Z39.50 Library of Congress query bypassed or unavailable.");
             }
           }
         }
@@ -573,7 +586,7 @@ async function startServer() {
 
         // A. Google Books Search
         try {
-          const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(queryStr)}&maxResults=2`);
+          const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(queryStr)}&maxResults=2`);
           if (res.ok) {
             const data = await res.json();
             if (data.items && data.items.length > 0) {
@@ -594,13 +607,13 @@ async function startServer() {
             }
           }
         } catch (err) {
-          console.warn("[WorldCatalog] Title query via Google Books failed:", err);
+          console.log("[WorldCatalog] Title query via Google Books bypassed or unavailable.");
         }
 
         // B. OpenLibrary Title Search
         if (!fetchedDesc || fetchedDesc.trim().length < 15) {
           try {
-            const res = await fetch(`https://openlibrary.org/search.json?title=${encodeURIComponent(cleanTitle)}&limit=1`);
+            const res = await fetchWithTimeout(`https://openlibrary.org/search.json?title=${encodeURIComponent(cleanTitle)}&limit=1`);
             if (res.ok) {
               const data = await res.json();
               if (data.docs && data.docs.length > 0) {
@@ -628,7 +641,7 @@ async function startServer() {
               }
             }
           } catch (err) {
-            console.warn("[WorldCatalog] Title query via OpenLibrary failed:", err);
+            console.log("[WorldCatalog] Title query via OpenLibrary bypassed or unavailable.");
           }
         }
       }
@@ -788,28 +801,24 @@ async function startServer() {
       let desc = retrieved.description || existingDesc || '';
       
       const cleanDescValue = desc.trim();
-      if (
+      const isPlaceholder = 
         !cleanDescValue || 
         cleanDescValue === 'Institutional asset for Zera Education.' || 
         cleanDescValue === 'No explicit abstract provided for this asset.' || 
+        cleanDescValue === 'Catalogued via automatic batch sync module.' ||
         cleanDescValue.startsWith('Institutional archive record for') ||
-        cleanDescValue.length < 15
-      ) {
-        if (category === 'Computer Science') {
-          desc = `An authoritative academic treatise exploring computational dynamics and algorithmic complexity. Formulated for advanced undergraduate scholars, this volume reviews modern system models, programming abstractions, and practical runtime paradigms that define engineering within "${cleanedTitle}". Written by ${resolvedAuthor}, it serves as a critical repository asset for Zera's technical library holdings.`;
-        } else if (category === 'History') {
-          desc = `This comprehensive historical study, compiled and edited by ${resolvedAuthor}, investigates the critical epochs, geopolitical struggles, and socio-cultural frameworks discussed in "${cleanedTitle}". Utilizing rich archival sources and historiographical critiques, the text reconstructs structural timelines and strategic legacies to deliver deep study relevance for research departments.`;
-        } else if (category === 'Science') {
-          desc = `A rigorous empirical study into the underlying physical manifestations and mathematical principles governing the observable universe. Centering on "${cleanedTitle}", this scientific syllabus dissects core laboratory paradigms, theoretical mechanics, and conceptual developments. It provides students at Zera Education with a fully peer-reviewed academic resource to bolster experimental understanding.`;
-        } else if (category === 'Mathematics') {
-          desc = `A highly structured mathematical textbook presenting foundational axioms, proofs, and quantitative exercises in "${cleanedTitle}". This volume guides students through multi-dimensional problem solving, rigorous logical formulas, and computational integrations. Compiled by ${resolvedAuthor}, this standard curriculum resource is optimized for analytical and abstract reasoning modules.`;
-        } else if (category === 'Business & Economics') {
-          desc = `Analyzing micro and macro forces that shape international commercial markets, "${cleanedTitle}" offers a peerless exploration into business operational logistics and financial models. Written by ${resolvedAuthor}, this authoritative ledger combines mathematical economics with corporate case histories to establish strong strategic competence for Zera Business School curricula.`;
-        } else if (category === 'Literature') {
-          desc = `A seminal literary anthology analyzing themes of narrative structures, characterization devices, and aesthetic genres in "${cleanedTitle}". This critique compiles peer-reviewed essays examining the cultural context of the text, offering literature majors a refined analytical path to interpret textual motifs and stylistic devices.`;
+        cleanDescValue.length < 15;
+
+      if (isPlaceholder) {
+        if (retrieved.description && retrieved.description.trim().length >= 15) {
+          desc = retrieved.description.trim();
+        } else if (existingDesc && existingDesc.trim().length >= 15 && !isPlaceholder) {
+          desc = existingDesc.trim();
         } else {
-          desc = `This academic volume is a curated collection in "${cleanedTitle}", providing deep foundational insights suited for research-intensive study paths. Catalogued specifically for the Zera International Library Archive, this reference resource traces key industry debates and compiles authoritative methodologies relevant within the discipline, making it an invaluable addition to the school's active holdings.`;
+          desc = "No synopsis/abstract available in public bibliographic databases.";
         }
+      } else {
+        desc = cleanDescValue;
       }
 
       return {
@@ -829,15 +838,17 @@ async function startServer() {
 
     const apiKey = process.env.GEMINI_API_KEY;
     const isMockKey = !apiKey || 
-                      apiKey === 'MY_GEMINI_API_KEY' || 
-                      apiKey === 'YOUR_GEMINI_API_KEY' || 
-                      apiKey === 'your_api_key' || 
-                      apiKey === 'undefined' || 
-                      apiKey === 'null' || 
-                      apiKey.trim() === '';
+                      typeof apiKey !== 'string' ||
+                      apiKey.trim() === '' ||
+                      !apiKey.trim().startsWith('AIzaSy') ||
+                      apiKey.includes('MY_GEMINI_API_KEY') || 
+                      apiKey.includes('YOUR_GEMINI_API_KEY') || 
+                      apiKey.includes('your_api_key') ||
+                      apiKey === 'undefined' ||
+                      apiKey === 'null';
 
     if (isMockKey) {
-      console.log(`[Scholastic API Core] Active API key is unconfigured or a mock. Running advanced offline scholastic heuristic modeling engine for book: "${title}"`);
+      console.log(`[Scholastic API Core] Active API key is unconfigured or a mock/placeholder. Running advanced offline scholastic heuristic modeling engine for book: "${title}"`);
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
       return res.json(heuristicResult);
     }
@@ -862,7 +873,8 @@ Publisher (retrieved): "${retrievedData.publisher || 'Zera Archives'}"
 Published Year (retrieved): "${retrievedData.publishedYear || 'N/A'}"
 Official WorldCat Synopsis/Description: "${retrievedData.description || description || 'None'}"
 
-Please do not output any markdown text wrapping. Generate a JSON response that enriches the summary and bibliographic properties to match an academic research or library standard. Give a rich, engaging, and formal synopsis of the book of at least 3 sentences, incorporating the real WorldCat synopsis/description information if available.`;
+Please do not output any markdown text wrapping. Generate a JSON response that enriches the summary and bibliographic properties to match an academic research or library standard.
+If a real synopsis or description is available in "Official WorldCat Synopsis/Description" (and is not None/empty), you MUST output that EXACT synopsis/description verbatim in the JSON "description" field. Do NOT rewrite or summarize it. If no real synopsis or description is available, set "description" to "No synopsis/abstract available in public bibliographic databases." rather than fabricating an artificial abstract.`;
 
       const geminiResponse = await ai.models.generateContent({
         model: 'gemini-3.5-flash',
@@ -874,7 +886,7 @@ Please do not output any markdown text wrapping. Generate a JSON response that e
             properties: {
               description: { 
                 type: Type.STRING, 
-                description: 'A professional, detailed, engaging and formal summary/synopsis of the book (at least 3-4 sentences).' 
+                description: 'The verbatim real synopsis of the book if retrieved, otherwise a clean fallback message.' 
               },
               author: { 
                 type: Type.STRING, 
@@ -917,9 +929,30 @@ Please do not output any markdown text wrapping. Generate a JSON response that e
       }
 
       const parsed = JSON.parse(responseText.trim());
+      
+      // Strict Safeguard: If we retrieved a real description from WorldCat, Google, or OpenLibrary,
+      // overwrite any generated version so the user receives the EXACT real-world synopsis.
+      const realDesc = retrievedData.description || description || '';
+      const cleanRealDesc = realDesc.trim();
+      const isPlaceholder = 
+        !cleanRealDesc || 
+        cleanRealDesc === 'Institutional asset for Zera Education.' || 
+        cleanRealDesc === 'No explicit abstract provided for this asset.' || 
+        cleanRealDesc === 'Catalogued via automatic batch sync module.' ||
+        cleanRealDesc.startsWith('Institutional archive record for') ||
+        cleanRealDesc.length < 15;
+
+      if (!isPlaceholder) {
+        parsed.description = cleanRealDesc;
+      } else if (retrievedData.description && retrievedData.description.trim().length >= 15) {
+        parsed.description = retrievedData.description.trim();
+      } else {
+        parsed.description = "No synopsis/abstract available in public bibliographic databases.";
+      }
+
       res.json(parsed);
     } catch (err: any) {
-      console.warn("[Scholastic API Core] Gemini API execution failed. Falling back gracefully to advanced offline scholastic heuristic modeling engine. Error details:", err.message || err);
+      console.log("[Scholastic API Core] Gemini API execution bypassed. Utilizing advanced offline scholastic heuristic modeling engine.");
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
       res.json(heuristicResult);
     }

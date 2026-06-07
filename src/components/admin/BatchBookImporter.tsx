@@ -72,6 +72,7 @@ interface UploadedRow {
   isbn: string;
   category: string;
   copies: number;
+  description?: string;
 }
 
 interface ImportErrorItem {
@@ -112,6 +113,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
   const [isbnIdx, setIsbnIdx] = useState<number>(-1);
   const [categoryIdx, setCategoryIdx] = useState<number>(-1);
   const [copiesIdx, setCopiesIdx] = useState<number>(-1);
+  const [descriptionIdx, setDescriptionIdx] = useState<number>(-1);
 
   // Live import state
   const [importJobs, setImportJobs] = useState<ActiveJob[]>([]);
@@ -188,6 +190,8 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
             setCategoryIdx(idx);
           } else if (lower.includes('cop') || lower === 'copies' || lower.includes('quantity') || lower === 'qty') {
             setCopiesIdx(idx);
+          } else if (lower.includes('summar') || lower.includes('synops') || lower.includes('descrip') || lower.includes('abstract') || lower.includes('notes')) {
+            setDescriptionIdx(idx);
           }
         });
 
@@ -274,6 +278,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
       const category = categoryIdx !== -1 ? (columns[categoryIdx] || '').trim() : 'Fiction';
       const rawCopies = copiesIdx !== -1 ? parseInt(columns[copiesIdx] || '1', 10) : 1;
       const copies = isNaN(rawCopies) || rawCopies < 1 ? 1 : rawCopies;
+      const description = descriptionIdx !== -1 ? (columns[descriptionIdx] || '').trim() : '';
 
       if (!title && !isbn) {
         errors.push({
@@ -282,7 +287,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           reason: 'Both Title and ISBN are empty. At least one identifier is required.'
         });
       } else {
-        rows.push({ title, author, isbn, category, copies });
+        rows.push({ title, author, isbn, category, copies, description });
       }
     });
 
@@ -342,7 +347,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
         const isbnToUse = matchedBook?.isbn || currentJob.row.isbn || '';
         const coverToUse = matchedBook?.coverUrl || syncedCover;
         const categoryToUse = matchedBook?.category || currentJob.row.category || 'Fiction';
-        const descToUse = matchedBook?.description || 'Catalogued via automatic batch sync module.';
+        const descToUse = currentJob.row.description || matchedBook?.description || 'Catalogued via automatic batch sync module.';
         const publisherToUse = matchedBook?.publisher || 'Zera Archives';
         const yearToUse = matchedBook?.publishedYear || new Date().getFullYear();
         const subjectsToUse = matchedBook?.subjects || [categoryToUse];
@@ -369,7 +374,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           console.warn("AI enrichment during batch import timed out/failed:", err);
         }
 
-        const finalDesc = enrichedDetails?.description || descToUse;
+        const finalDesc = currentJob.row.description || enrichedDetails?.description || descToUse;
         const finalAuthor = enrichedDetails?.author || authorToUse;
         const finalCategory = enrichedDetails?.category || categoryToUse;
         const finalPublisher = enrichedDetails?.publisher || publisherToUse;
@@ -617,6 +622,20 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
                      className="w-full p-3 bg-white border border-natural-border rounded-xl text-xs font-bold text-natural-text focus:ring-2 focus:ring-zera-emerald"
                    >
                      <option value={-1}>-- Ignore (Default 1 Copy) --</option>
+                     {headers.map((h, i) => (
+                       <option key={i} value={i}>Column {i + 1}: {h}</option>
+                     ))}
+                   </select>
+                </div>
+
+                <div className="space-y-1.5">
+                   <span className="text-[9px] font-black text-natural-muted uppercase tracking-wider block">Summary / Synopsis</span>
+                   <select 
+                     value={descriptionIdx}
+                     onChange={e => setDescriptionIdx(parseInt(e.target.value))}
+                     className="w-full p-3 bg-white border border-natural-border rounded-xl text-xs font-bold text-natural-text focus:ring-2 focus:ring-zera-emerald"
+                   >
+                     <option value={-1}>-- Ignore / Choose Column --</option>
                      {headers.map((h, i) => (
                        <option key={i} value={i}>Column {i + 1}: {h}</option>
                      ))}
