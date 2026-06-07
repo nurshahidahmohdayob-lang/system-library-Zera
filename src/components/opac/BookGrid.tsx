@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
-import { Search, Book as BookIcon, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, Globe } from 'lucide-react';
+import { Search, Book as BookIcon, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, Globe, LayoutGrid, List, Sparkles, Loader2 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
 
@@ -12,7 +12,8 @@ export const BookGrid = () => {
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(true);
+   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => {
     // Show only active books in the public grid
@@ -28,16 +29,19 @@ export const BookGrid = () => {
     return () => unsubscribe();
   }, []);
 
+
+
   const filteredBooks = books.filter(b => 
     b.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.author?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.isbn?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+
+
   return (
     <div className="space-y-12">
-      <div className="max-w-2xl mx-auto text-center">
-        <h1 className="text-5xl font-serif font-black text-zera-emerald mb-6 tracking-tight">Search Collections</h1>
+      <div className="max-w-2xl mx-auto text-center space-y-4">
         <form onSubmit={(e) => e.preventDefault()} className="relative group">
           <button 
             type="button"
@@ -61,52 +65,161 @@ export const BookGrid = () => {
             Search
           </button>
         </form>
+
+
+
+        <div className="flex justify-between items-center bg-white/70 backdrop-blur-sm px-6 py-3 rounded-2xl border border-natural-border shadow-sm">
+          <span className="text-xs font-bold text-natural-muted">
+            Found {filteredBooks.length} academic holdings
+          </span>
+          <div className="flex bg-natural-bg p-1 rounded-xl border border-natural-border shadow-inner">
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
+                viewMode === 'grid' 
+                  ? "bg-white text-zera-emerald shadow-sm border border-natural-border/40" 
+                  : "text-natural-muted hover:text-natural-text"
+              )}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              Grid View
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
+                viewMode === 'list' 
+                  ? "bg-white text-zera-emerald shadow-sm border border-natural-border/40" 
+                  : "text-natural-muted hover:text-natural-text"
+              )}
+            >
+              <List className="w-3.5 h-3.5" />
+              List View with Summaries
+            </button>
+          </div>
+        </div>
       </div>
 
       {loading ? (
         <div className="flex justify-center p-20">
           <div className="w-10 h-10 border-4 border-zera-emerald border-t-transparent rounded-full animate-spin"></div>
         </div>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-          {filteredBooks.map((book, i) => (
-            <motion.div 
-              key={book.id}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: minHeight(i * 0.03, 0.5) }}
-              onClick={() => setSelectedBook(book)}
-              className="group cursor-pointer bg-white p-2 rounded-2xl border border-natural-border hover:shadow-xl hover:border-zera-yellow transition-all"
-            >
-              <div className="aspect-[3/4.2] bg-natural-bg rounded-xl mb-2 overflow-hidden relative shadow-inner border border-natural-border/50">
-                <img 
-                  src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400&auto=format&fit=crop'} 
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                  alt={book.title}
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute top-1 right-1">
-                  <span className={cn(
-                    "px-1.5 py-0.5 rounded-full text-[6px] font-black uppercase tracking-widest shadow-sm border",
-                    book.availableCopies > 0 
-                      ? "bg-zera-emerald text-white border-zera-emerald-dark" 
-                      : "bg-red-500 text-white border-red-600"
-                  )}>
-                    {book.availableCopies > 0 ? 'In' : 'Out'}
-                  </span>
+      ) : viewMode === 'grid' ? (
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4 animate-in fade-in duration-350">
+          {filteredBooks.map((book, i) => {
+            const isAbstractAvailable = book.description && 
+              book.description !== 'Institutional asset for Zera Education.' && 
+              book.description !== 'No explicit abstract provided for this asset.' && 
+              !book.description.startsWith('Institutional archive record for') &&
+              book.description.length >= 15;
+
+            return (
+              <motion.div 
+                key={book.id}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: minHeight(i * 0.03, 0.5) }}
+                onClick={() => setSelectedBook(book)}
+                className="group cursor-pointer bg-white p-2 rounded-2xl border border-natural-border hover:shadow-xl hover:border-zera-yellow transition-all"
+                title={isAbstractAvailable ? `Abstract: ${book.description}` : "Click to view scholastic catalog metadata"}
+              >
+                <div className="aspect-[3/4.2] bg-natural-bg rounded-xl mb-2 overflow-hidden relative shadow-inner border border-natural-border/50">
+                  <img 
+                    src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400&auto=format&fit=crop'} 
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                    alt={book.title}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400&auto=format&fit=crop';
+                    }}
+                  />
+                  <div className="absolute top-1 right-1">
+                    <span className={cn(
+                      "px-1.5 py-0.5 rounded-full text-[6px] font-black uppercase tracking-widest shadow-sm border",
+                      book.availableCopies > 0 
+                        ? "bg-zera-emerald text-white border-zera-emerald-dark" 
+                        : "bg-red-500 text-white border-red-600"
+                    )}>
+                      {book.availableCopies > 0 ? 'In' : 'Out'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <h3 className="font-serif text-[11px] font-black text-zera-emerald leading-tight mb-0.5 line-clamp-1">{book.title}</h3>
-              <p className="text-[9px] text-natural-muted font-bold truncate opacity-80">{book.author}</p>
-              
-              <div className="mt-1.5 flex items-center justify-between">
-                <span className="text-[7px] px-1.5 py-0.5 bg-natural-bg rounded text-natural-muted uppercase font-black tracking-widest">
-                  {book.category}
-                </span>
-                <BookIcon className="w-2.5 h-2.5 text-zera-emerald/40 group-hover:text-zera-emerald transition-colors" />
-              </div>
-            </motion.div>
-          ))}
+                <h3 className="font-serif text-[11px] font-black text-zera-emerald leading-tight mb-0.5 line-clamp-1">{book.title}</h3>
+                <p className="text-[9px] text-natural-muted font-bold truncate opacity-80">By {book.author}</p>
+                
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className={cn(
+                    "text-[7px] px-1.5 py-0.5 rounded font-black uppercase tracking-widest flex items-center gap-0.5",
+                    "bg-natural-bg text-natural-muted font-black"
+                  )}>
+                    {book.category}
+                  </span>
+                  <BookIcon className="w-2.5 h-2.5 text-zera-emerald/40 group-hover:text-zera-emerald transition-colors" />
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="space-y-4 max-w-4xl mx-auto animate-in fade-in duration-350">
+          {filteredBooks.map((book, i) => {
+            const hasRealDesc = book.description && 
+              book.description !== 'Institutional asset for Zera Education.' && 
+              book.description !== 'No explicit abstract provided for this asset.' && 
+              !book.description.startsWith('Institutional archive record for');
+            
+            return (
+              <motion.div
+                key={book.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: minHeight(i * 0.04, 0.4) }}
+                onClick={() => setSelectedBook(book)}
+                className="group cursor-pointer bg-white p-5 rounded-[24px] border border-natural-border hover:shadow-xl hover:border-zera-yellow transition-all flex flex-col sm:flex-row gap-6 items-start"
+              >
+                <div className="w-20 h-28 bg-natural-bg rounded-xl overflow-hidden shrink-0 border border-natural-border relative shadow-sm">
+                  <img 
+                    src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'} 
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    alt={book.title}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200';
+                    }}
+                  />
+                  <div className="absolute top-1 right-1">
+                    <span className={cn(
+                      "px-1 py-0.5 rounded-md text-[5px] font-black uppercase tracking-widest shadow-sm",
+                      book.availableCopies > 0 ? "bg-zera-emerald text-white" : "bg-red-500 text-white"
+                    )}>
+                      {book.availableCopies > 0 ? 'In' : 'Out'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-3 min-w-0">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-serif text-lg font-black text-zera-emerald leading-tight">{book.title}</h3>
+                      <span className="text-[8px] px-2 py-0.5 bg-natural-bg border border-natural-border rounded-full text-natural-muted font-bold uppercase tracking-widest">
+                        {book.category}
+                      </span>
+                    </div>
+                    <p className="text-xs font-bold text-natural-muted mt-1">By {book.author} {book.publisher && `• Publisher: ${book.publisher}`}</p>
+                  </div>
+
+                  <div className="text-xs text-natural-text font-serif leading-relaxed line-clamp-3 bg-natural-bg/45 p-3 rounded-xl border border-natural-border/30">
+                    {book.description || 'Institutional asset for Zera Education.'}
+                  </div>
+
+
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
       )}
 
@@ -141,6 +254,9 @@ export const BookGrid = () => {
                     className="w-full h-full object-cover"
                     alt="Cover"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=600';
+                    }}
                   />
                 </div>
               </div>
@@ -203,7 +319,7 @@ export const BookGrid = () => {
 
                 <div className="space-y-3">
                    <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-natural-muted mb-1">Abstract</h4>
-                   <p className="text-natural-text font-serif leading-relaxed text-base line-clamp-4">
+                   <p className="text-natural-text font-serif leading-relaxed text-base">
                      {selectedBook.description || `Institutional asset for Zera Education.`}
                    </p>
                 </div>

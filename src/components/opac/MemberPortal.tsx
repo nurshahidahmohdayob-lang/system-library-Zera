@@ -390,6 +390,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
                       <div key={loan.id} className="flex gap-4 p-4 bg-natural-bg rounded-3xl hover:shadow-md transition-shadow">
                         <div className="w-16 h-20 bg-white rounded-xl overflow-hidden flex-shrink-0 border border-natural-border shadow-sm">
                           <img 
+                            onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'; }} 
                             src={loan.book?.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'} 
                             className="w-full h-full object-cover"
                             alt="Book"

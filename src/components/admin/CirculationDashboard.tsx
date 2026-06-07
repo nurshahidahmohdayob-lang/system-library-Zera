@@ -374,7 +374,7 @@ export const CirculationDashboard = () => {
                      >
                        <div className="w-10 h-10 rounded-lg bg-natural-bg overflow-hidden flex-shrink-0 border border-natural-border flex items-center justify-center">
                          {book.coverUrl ? (
-                           <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                           <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'; }} />
                          ) : (
                            <Book className="w-4 h-4 text-natural-muted opacity-40" />
                          )}

@@ -338,6 +338,7 @@ export const InventoryAudit = () => {
                 className="bg-emerald-50 border-2 border-emerald-100 rounded-3xl p-6 flex items-center gap-6"
               >
                 <img 
+                  onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400'; }} 
                   src={lastScanned.coverUrl} 
                   alt={lastScanned.title} 
                   className="w-16 h-24 object-cover rounded-md shadow-md border-2 border-white"

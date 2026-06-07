@@ -12,9 +12,14 @@ import {
   Barcode,
   Loader2,
   Edit2,
-  Archive
+  Archive,
+  UploadCloud,
+  Layers,
+  Copy,
+  CheckCircle2
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
+import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
@@ -32,6 +37,7 @@ export const CatalogManager = () => {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const itemsPerPage = 20;
+  const [isBatchImporting, setIsBatchImporting] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -53,6 +59,10 @@ export const CatalogManager = () => {
     availableCopies: 1,
     coverUrl: ''
   });
+
+
+
+
 
   useEffect(() => {
     // Fetch all books and filter in-memory to ensure visibility of un-migrated records
@@ -200,19 +210,62 @@ export const CatalogManager = () => {
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => {
-            setIsAdding(!isAdding);
-            if (isAdding) setEditingBook(null);
-          }}
-          className={cn(
-            "flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider",
-            isAdding ? "bg-natural-bg text-natural-muted border border-natural-border" : "bg-zera-emerald text-white hover:bg-zera-emerald-dark"
-          )}
-        >
-          {isAdding ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {isAdding ? 'Cancel' : 'Add New Title'}
-        </button>
+        <div className="flex gap-3">
+          <button 
+            type="button"
+            onClick={async () => {
+              if (window.confirm("Are you sure you want to permanently delete ALL book catalog records, copies, and loans? This action is extremely destructive and cannot be undone.")) {
+                setSaving(true);
+                try {
+                  const booksSnap = await getDocs(collection(db, 'books'));
+                  for (const docRef of booksSnap.docs) {
+                    await deleteDoc(doc(db, 'books', docRef.id));
+                  }
+                  const copiesSnap = await getDocs(collection(db, 'copies'));
+                  for (const docRef of copiesSnap.docs) {
+                    await deleteDoc(doc(db, 'copies', docRef.id));
+                  }
+                  const loansSnap = await getDocs(collection(db, 'loans'));
+                  for (const docRef of loansSnap.docs) {
+                    await deleteDoc(doc(db, 'loans', docRef.id));
+                  }
+                  alert("Successfully deleted all books, copies, and active/completed loans.");
+                } catch (error) {
+                  alert("Failed to delete all book data: " + (error instanceof Error ? error.message : String(error)));
+                } finally {
+                  setSaving(false);
+                }
+              }
+            }}
+            className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 text-white hover:bg-rose-700 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider hover:scale-[1.01]"
+            title="Permanently erase all bibliographic records, item copies, and loan transactions from Firestore."
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete All Book Data
+          </button>
+          <button 
+            type="button"
+            onClick={() => setIsBatchImporting(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-zera-yellow text-zera-emerald-dark hover:brightness-95 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
+          >
+            <UploadCloud className="w-4 h-4" />
+            Batch Import / Sync
+          </button>
+          <button 
+            type="button"
+            onClick={() => {
+              setIsAdding(!isAdding);
+              if (isAdding) setEditingBook(null);
+            }}
+            className={cn(
+              "flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider",
+              isAdding ? "bg-natural-bg text-natural-muted border border-natural-border" : "bg-zera-emerald text-white hover:bg-zera-emerald-dark"
+            )}
+          >
+            {isAdding ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            {isAdding ? 'Cancel' : 'Add New Title'}
+          </button>
+        </div>
       </div>
 
       {isAdding && (
@@ -274,7 +327,7 @@ export const CatalogManager = () => {
              
              <div className="aspect-[3/4] bg-natural-bg rounded-2xl overflow-hidden relative border-2 border-dashed border-natural-border flex items-center justify-center">
                {newBook.coverUrl ? (
-                 <img src={newBook.coverUrl} alt="Preview" className="w-full h-full object-cover" />
+                 <img src={newBook.coverUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400'; }} />
                ) : (
                  <div className="text-center p-6 grayscale opacity-20">
                    <BookIcon className="w-12 h-12 mx-auto mb-2" />
@@ -471,10 +524,20 @@ export const CatalogManager = () => {
                 <td className="px-8 py-5">
                   <div className="flex gap-4 items-center">
                     <div className="w-10 h-12 bg-natural-bg rounded-lg border border-natural-border overflow-hidden shrink-0 shadow-sm transition-transform group-hover:scale-110">
-                      <img src={book.coverUrl} alt="Cover" className="w-full h-full object-cover" />
+                      <img 
+                        src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400'} 
+                        alt="Cover" 
+                        className="w-full h-full object-cover" 
+                        onError={(e) => {
+                          e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400';
+                        }}
+                      />
                     </div>
                     <div>
-                      <div className="font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight">{book.title}</div>
+                      <div className="font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight flex items-center gap-1.5 flex-wrap">
+                        {book.title}
+
+                      </div>
                       <div className="text-[10px] text-natural-muted font-bold uppercase tracking-wider mt-0.5">{book.author}</div>
                     </div>
                   </div>
@@ -561,6 +624,9 @@ export const CatalogManager = () => {
                   className="w-full h-full object-cover"
                   alt="Cover"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=600';
+                  }}
                 />
               </div>
             </div>
@@ -671,6 +737,12 @@ export const CatalogManager = () => {
           </div>
         </div>
       )}
+
+      {isBatchImporting && (
+        <BatchBookImporter onClose={() => setIsBatchImporting(false)} />
+      )}
+
+
     </div>
   );
 };
