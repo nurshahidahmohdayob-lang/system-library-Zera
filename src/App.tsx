@@ -137,9 +137,8 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
               <div className="absolute -left-12 -top-12 w-48 h-48 bg-zera-yellow/10 rounded-full blur-2xl" />
               
               <div className="relative z-10">
-                <div className="flex flex-col mb-10">
-                  <span className="font-serif text-2xl font-black text-white leading-none tracking-tighter uppercase">zera</span>
-                  <span className="text-[9px] font-bold text-zera-yellow uppercase tracking-[0.2em] -mt-1 whitespace-nowrap font-sans">International School</span>
+                <div className="mb-10">
+                  <ZeraLogo variant="white" className="h-9" />
                 </div>
                 
                 <h3 className="text-xl font-serif font-bold text-white leading-tight">School Archive & Library Registration</h3>
@@ -185,7 +184,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
             <div>
               {/* Header */}
               <div className="text-center mb-6">
-                <ZeraLogo className="mx-auto mb-2 scale-110 origin-center" />
+                <ZeraLogo className="mx-auto mb-2 h-10" />
                 <h2 className="text-xl font-serif font-black text-zera-emerald mt-4">
                   {mode === 'login' ? 'Member Access' : 'Register Member'}
                 </h2>
@@ -351,12 +350,15 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
   );
 };
 
-const ZeraLogo = ({ className }: { className?: string }) => {
+const ZeraLogo = ({ className, variant = 'color' }: { className?: string, variant?: 'color' | 'white' }) => {
+  // Official Zera Education horizontal lockup (2024 Brand Kit). Aspect ratio matches Hrz_*.png artwork.
   return (
-    <div className={cn("flex flex-col", className)}>
-      <span className="font-serif text-2xl font-black text-zera-emerald leading-none tracking-tighter uppercase">zera</span>
-      <span className="text-[9px] font-bold text-zera-emerald-light uppercase tracking-[0.2em] -mt-1 whitespace-nowrap">Education</span>
-    </div>
+    <img
+      src={variant === 'white' ? '/brand/Hrz_White.png' : '/brand/Hrz_Color.png'}
+      alt="Zera Education"
+      className={cn("w-auto object-contain select-none", className)}
+      draggable={false}
+    />
   );
 };
 

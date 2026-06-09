@@ -1,9 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
 @import "tailwindcss";
 
+/* Oakes Grotesk — official Zera Education typeface (2024 Brand Kit) */
+@font-face { font-family: "Oakes Grotesk"; font-style: normal; font-weight: 300; font-display: swap; src: url("/fonts/OG_Light.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: italic; font-weight: 300; font-display: swap; src: url("/fonts/OG_LightItal.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/OG_Regular.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: italic; font-weight: 400; font-display: swap; src: url("/fonts/OG_RegItal.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/OG_Medium.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: italic; font-weight: 500; font-display: swap; src: url("/fonts/OG_MedItal.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/OG_SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: italic; font-weight: 600; font-display: swap; src: url("/fonts/OG_SBoldItal.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/OG_Bold.ttf") format("truetype"); }
+@font-face { font-family: "Oakes Grotesk"; font-style: italic; font-weight: 700; font-display: swap; src: url("/fonts/OG_BoldItal.ttf") format("truetype"); }
+
 @theme {
-  --font-sans: "DM Sans", "Oakes Grotesk", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Playfair Display", Georgia, serif;
+  /* Oakes Grotesk is the brand typeface; DM Sans is the official web fallback.
+     The brand has no serif — display/headings use Oakes Grotesk, so font-serif maps to it too. */
+  --font-sans: "Oakes Grotesk", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Oakes Grotesk", "DM Sans", ui-sans-serif, system-ui, sans-serif;
 
   --color-natural-bg: #FCFAF7;
   --color-natural-text: #0D0D0D; /* Ink Black #0D0D0D from Brand Kit */
