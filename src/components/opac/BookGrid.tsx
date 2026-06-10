@@ -2,9 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
-import { Search, Book as BookIcon, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, Globe, LayoutGrid, List, Sparkles, Loader2 } from 'lucide-react';
+import { Search, Book as BookIcon, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
+import { useAuth } from '@/src/hooks/useAuth';
+import { useUserHolds } from '@/src/hooks/useHolds';
+import { HoldService } from '@/src/services/libraryService';
 
 const minHeight = (a: number, b: number) => a < b ? a : b;
 
@@ -14,6 +17,34 @@ export const BookGrid = () => {
   const [searchTerm, setSearchTerm] = useState('');
    const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+
+  const { profile } = useAuth();
+  const isMember = profile?.role === 'student' || profile?.role === 'teacher';
+  const userHolds = useUserHolds(isMember ? profile?.uid : undefined);
+  const heldBookIds = new Set(
+    userHolds.filter(h => h.status === 'pending' || h.status === 'ready').map(h => h.bookId)
+  );
+  const [holdLoading, setHoldLoading] = useState(false);
+  const [holdMsg, setHoldMsg] = useState<string | null>(null);
+
+  // Reset the hold message whenever a different book is opened.
+  useEffect(() => { setHoldMsg(null); }, [selectedBook]);
+
+  const handleHold = async (book: Book) => {
+    if (!profile) return;
+    setHoldLoading(true);
+    setHoldMsg(null);
+    try {
+      const res = await HoldService.requestHold(book, profile);
+      setHoldMsg(res === 'duplicate'
+        ? 'You already have an active hold on this title.'
+        : 'Hold requested — the librarian has been notified.');
+    } catch {
+      setHoldMsg('Could not place the hold. Please try again.');
+    } finally {
+      setHoldLoading(false);
+    }
+  };
 
   useEffect(() => {
     // Show only active books in the public grid
@@ -324,15 +355,42 @@ export const BookGrid = () => {
                    </p>
                 </div>
 
-                <div className="pt-4 flex flex-wrap gap-3">
-                  <button 
-                    onClick={() => {
-                      alert("Please visit the Librarian Control Desk to borrow this asset.");
-                    }}
-                    className="flex-1 min-w-[180px] h-14 bg-zera-emerald text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:shadow-xl hover:scale-[1.01] transition-all flex items-center justify-center gap-2"
-                  >
-                    <Copy className="w-4 h-4" /> Borrow Request
-                  </button>
+                <div className="pt-4 space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    {isMember ? (
+                      heldBookIds.has(selectedBook.id) ? (
+                        <button
+                          disabled
+                          className="flex-1 min-w-[180px] h-14 bg-emerald-50 text-zera-emerald border-2 border-emerald-200 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 cursor-default"
+                        >
+                          <BookmarkCheck className="w-4 h-4" /> Hold Requested
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleHold(selectedBook)}
+                          disabled={holdLoading}
+                          className="flex-1 min-w-[180px] h-14 bg-zera-emerald text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:shadow-xl hover:scale-[1.01] disabled:opacity-60 transition-all flex items-center justify-center gap-2"
+                        >
+                          {holdLoading
+                            ? <><Loader2 className="w-4 h-4 animate-spin" /> Placing Hold…</>
+                            : <><Bookmark className="w-4 h-4" /> Hold this Book</>}
+                        </button>
+                      )
+                    ) : (
+                      <button
+                        onClick={() => alert('Sign in via the Member Portal (or through Commun) to place a hold on this title.')}
+                        className="flex-1 min-w-[180px] h-14 bg-zera-emerald text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:shadow-xl hover:scale-[1.01] transition-all flex items-center justify-center gap-2"
+                      >
+                        <Copy className="w-4 h-4" /> Sign in to Hold
+                      </button>
+                    )}
+                  </div>
+                  {holdMsg && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-zera-emerald bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3">
+                      <Check className="w-4 h-4 shrink-0" />
+                      <span>{holdMsg}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>

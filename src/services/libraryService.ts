@@ -13,7 +13,7 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { db, auth } from '@/src/lib/firebase';
-import { Book, BookCopy, Loan, UserProfile } from '@/src/types';
+import { Book, BookCopy, Hold, Loan, UserProfile } from '@/src/types';
 import { OperationType, handleFirestoreError } from '@/src/hooks/useAuth';
 
 export const CatalogService = {
@@ -111,4 +111,64 @@ export const CirculationService = {
       handleFirestoreError(error, OperationType.GET, path);
     }
   }
+};
+
+/**
+ * Hold/reservation requests. A member (student or teacher) requests to hold a
+ * book; the librarian is notified via the pending-holds inbox and decides the
+ * outcome. Privilege checks live in firestore.rules (a member may only create
+ * their own pending hold and may only cancel it).
+ */
+export const HoldService = {
+  /** Create a pending hold for the current member. Returns 'duplicate' if one already exists. */
+  async requestHold(book: Book, user: UserProfile): Promise<'created' | 'duplicate'> {
+    const path = 'holds';
+    try {
+      // Block duplicate live requests for the same book by the same member.
+      const dupeQ = query(
+        collection(db, path),
+        where('userId', '==', user.uid),
+        where('bookId', '==', book.id),
+        where('status', 'in', ['pending', 'ready']),
+      );
+      const dupes = await getDocs(dupeQ);
+      if (!dupes.empty) return 'duplicate';
+
+      await addDoc(collection(db, path), {
+        bookId: book.id,
+        bookTitle: book.title,
+        bookAuthor: book.author ?? '',
+        bookCoverUrl: book.coverUrl ?? '',
+        userId: user.uid,
+        userName: user.name,
+        userRole: user.role ?? '',
+        userEmail: user.email ?? '',
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+      });
+      return 'created';
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
+    }
+  },
+
+  /** Librarian: move a hold through its lifecycle (ready / fulfilled / rejected). */
+  async updateHoldStatus(holdId: string, status: Hold['status']) {
+    const path = `holds/${holdId}`;
+    try {
+      await updateDoc(doc(db, 'holds', holdId), {
+        status,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+      throw error;
+    }
+  },
+
+  /** Member: withdraw their own pending hold. */
+  async cancelHold(holdId: string) {
+    return this.updateHoldStatus(holdId, 'cancelled');
+  },
 };

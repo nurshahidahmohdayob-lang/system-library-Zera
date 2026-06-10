@@ -64,6 +64,24 @@ export interface Loan {
   status: 'active' | 'returned' | 'overdue';
 }
 
+export interface Hold {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  bookAuthor?: string;
+  bookCoverUrl?: string;
+  userId: string;
+  userName: string;
+  userRole?: string;
+  userEmail?: string;
+  // pending: awaiting librarian · ready: set aside for pickup · fulfilled: borrowed
+  // cancelled: withdrawn by member · rejected: declined by librarian
+  status: 'pending' | 'ready' | 'fulfilled' | 'cancelled' | 'rejected';
+  requestedAt: string;
+  updatedAt?: string;
+  note?: string;
+}
+
 export interface OnlineResource {
   id: string;
   title: string;

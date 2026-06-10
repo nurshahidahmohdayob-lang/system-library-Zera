@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  User, 
-  Search, 
-  BookOpen, 
-  Clock, 
-  Calendar, 
+import {
+  User,
+  Search,
+  BookOpen,
+  Clock,
+  Calendar,
   AlertCircle,
   ChevronRight,
   ShieldCheck,
   History,
-  ArrowRight
+  ArrowRight,
+  Bookmark,
+  Loader2,
+  X,
+  LogIn
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { collection, query, where, getDocs, onSnapshot, orderBy } from 'firebase/firestore';
@@ -17,6 +21,8 @@ import { UserProfile, Loan, Book } from '@/src/types/index';
 import { cn } from '@/src/lib/utils';
 import { format, isAfter, parseISO } from 'date-fns';
 import { useAuth, handleFirestoreError, OperationType } from '@/src/hooks/useAuth';
+import { useUserHolds } from '@/src/hooks/useHolds';
+import { HoldService } from '@/src/services/libraryService';
 
 interface MemberPortalProps {
   onOpenAuth?: () => void;
@@ -139,6 +145,28 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
   const activeLoans = loans.filter(l => l.status === 'active');
   const pastLoans = loans.filter(l => l.status === 'returned');
 
+  // Holds are personal: only load them when viewing your OWN logged-in profile.
+  const myUid = loggedInProfile && profile && loggedInProfile.uid === profile.uid ? profile.uid : undefined;
+  const holds = useUserHolds(myUid);
+  const activeHolds = holds.filter(h => h.status === 'pending' || h.status === 'ready');
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+
+  const handleCancelHold = async (holdId: string) => {
+    setCancelingId(holdId);
+    try {
+      await HoldService.cancelHold(holdId);
+    } catch (e) {
+      console.error('Cancel hold failed:', e);
+    } finally {
+      setCancelingId(null);
+    }
+  };
+
+  const holdStatusLabel: Record<string, string> = {
+    pending: 'Awaiting Librarian',
+    ready: 'Ready for Pickup',
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {!profile ? (
@@ -204,8 +232,32 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
             <div className="space-y-3">
               <h2 className="text-4xl font-serif font-black text-zera-emerald">Member Borrowing Portal</h2>
               <p className="text-natural-muted font-medium max-w-md mx-auto leading-relaxed text-sm">
-                Students and Teachers can view borrow history instantly by selecting your role and searching your name below.
+                <span className="font-bold text-zera-emerald">Teachers</span> sign in with Commun to place holds and track loans. Students can look up borrowing by name below.
               </p>
+            </div>
+
+            {/* Primary sign-in: Commun SSO — teaching staff only (gives hold + borrowing access) */}
+            <div className="bg-white border border-natural-border rounded-[36px] p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest text-zera-emerald bg-zera-yellow/15 border border-zera-yellow/30 rounded-full py-1.5">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                For Teachers &amp; Staff
+              </div>
+              <button
+                type="button"
+                onClick={() => { window.location.href = '/api/v1/sso/login'; }}
+                className="w-full py-4 bg-zera-emerald hover:bg-zera-emerald-dark text-white rounded-3xl font-black text-xs uppercase tracking-widest shadow-lg flex items-center justify-center gap-2.5 transition-all cursor-pointer select-none active:scale-[0.99]"
+              >
+                <LogIn className="w-4 h-4" />
+                Sign in with Commun
+              </button>
+              <p className="text-[10px] font-bold text-natural-muted leading-relaxed">
+                Teachers: use your Commun login to hold books and view your loans — you'll return here already signed in.
+              </p>
+            </div>
+
+            <div className="relative py-1">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-natural-border" /></div>
+              <div className="relative flex justify-center"><span className="bg-natural-bg px-3 text-[9px] font-black uppercase tracking-widest text-natural-muted">Students — quick lookup by name</span></div>
             </div>
 
             <form onSubmit={handleSearch} className="space-y-6 bg-white border border-natural-border rounded-[36px] p-6 shadow-sm text-left">
@@ -420,6 +472,65 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
                 </div>
               )}
             </div>
+
+            {/* My Holds / Reservations */}
+            {myUid && (
+              <div className="bg-white border border-natural-border rounded-[40px] p-8 shadow-sm">
+                <div className="flex items-center gap-3 mb-8">
+                  <div className="p-3 bg-zera-yellow/20 rounded-2xl">
+                    <Bookmark className="w-6 h-6 text-zera-emerald" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-zera-emerald uppercase tracking-tight">My Holds</h3>
+                    <p className="text-[10px] font-bold text-natural-muted uppercase">Books You've Requested to Borrow</p>
+                  </div>
+                </div>
+
+                {activeHolds.length === 0 ? (
+                  <div className="text-center py-12 border-2 border-dashed border-natural-border rounded-3xl">
+                    <p className="text-natural-muted font-serif italic">
+                      No active holds. Browse the Physical Library and tap “Hold this Book” to reserve one.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {activeHolds.map((hold) => (
+                      <div key={hold.id} className="flex gap-4 p-4 bg-natural-bg rounded-3xl items-center">
+                        <div className="w-14 h-18 bg-white rounded-xl overflow-hidden flex-shrink-0 border border-natural-border shadow-sm">
+                          <img
+                            onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'; }}
+                            src={hold.bookCoverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'}
+                            className="w-full h-full object-cover"
+                            alt={hold.bookTitle}
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-bold text-zera-emerald leading-tight mb-1 truncate">{hold.bookTitle}</h4>
+                          <span className={cn(
+                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                            hold.status === 'ready'
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-amber-50 text-amber-700 border border-amber-200"
+                          )}>
+                            <Clock className="w-3 h-3" />
+                            {holdStatusLabel[hold.status] || hold.status}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleCancelHold(hold.id)}
+                          disabled={cancelingId === hold.id}
+                          title="Cancel hold"
+                          className="p-2.5 rounded-xl text-natural-muted hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          {cancelingId === hold.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* History */}
             <div className="bg-white border border-natural-border rounded-[40px] p-8 shadow-sm">

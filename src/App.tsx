@@ -26,7 +26,8 @@ import {
   Lock,
   UserCircle,
   Shield,
-  ShieldAlert
+  ShieldAlert,
+  Bookmark
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
@@ -43,6 +44,8 @@ import { Acquisition } from '@/src/components/admin/Acquisition';
 import { Reports } from '@/src/components/admin/Reports';
 import { InventoryAudit } from '@/src/components/admin/InventoryAudit';
 import { BarcodeStudio } from '@/src/components/admin/BarcodeStudio';
+import { HoldRequests } from '@/src/components/admin/HoldRequests';
+import { usePendingHoldsCount } from '@/src/hooks/useHolds';
 import { Barcode as BarcodeIcon } from 'lucide-react';
 
 // --- Shared Components ---
@@ -484,12 +487,14 @@ const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
 
 const AdminPanel = () => {
   const { profile, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'circulation' | 'inventory' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'circulation' | 'holds' | 'inventory' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
+  const pendingHolds = usePendingHoldsCount(true);
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'catalog', label: 'Catalogue', icon: BookOpen },
     { id: 'circulation', label: 'Circulation', icon: BarChart },
+    { id: 'holds', label: 'Hold Requests', icon: Bookmark, badge: pendingHolds },
     { id: 'inventory', label: 'Inventory Audit', icon: BookMarked },
     { id: 'barcodes', label: 'Barcode Studio', icon: BarcodeIcon },
     { id: 'students', label: 'Students', icon: Users },
@@ -521,7 +526,12 @@ const AdminPanel = () => {
                 )}
               >
                 <item.icon className={cn("w-4 h-4", activeTab === item.id ? "text-zera-emerald-dark" : "text-natural-muted group-hover:text-zera-emerald")} />
-                {item.label}
+                <span className="flex-1 text-left">{item.label}</span>
+                {'badge' in item && item.badge > 0 && (
+                  <span className="ml-auto min-w-5 h-5 px-1.5 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-black shadow-sm">
+                    {item.badge}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -572,6 +582,7 @@ const AdminPanel = () => {
             {activeTab === 'dashboard' && <AdminDashboard onNavigate={setActiveTab} />}
             {activeTab === 'catalog' && <CatalogManager />}
             {activeTab === 'circulation' && <CirculationDashboard />}
+            {activeTab === 'holds' && <HoldRequests />}
             {activeTab === 'students' && <UserManagement key="students" roleFilter="student" />}
             {activeTab === 'teachers' && <UserManagement key="teachers" roleFilter="teacher" />}
             {activeTab === 'resources' && <OnlineResources />}
