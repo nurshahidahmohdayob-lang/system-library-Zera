@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { 
-  onAuthStateChanged, 
+import {
+  onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut,
   User as FirebaseUser,
   GoogleAuthProvider,
@@ -30,6 +31,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Commun SSO handoff: if we arrived from /sso/callback, redeem the one-time
+    // cookie for a Firebase custom token and sign in. signInWithCustomToken then
+    // drives onAuthStateChanged below, which reads the server-provisioned profile.
+    const handleSsoHandoff = async () => {
+      if (typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('sso') === '1') {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        // An SSO session supersedes any prior offline-simulation session.
+        localStorage.removeItem('zera_active_local_credentials');
+        try {
+          const r = await fetch('/api/v1/sso/exchange', { method: 'POST' });
+          if (r.ok) {
+            const { token } = await r.json();
+            if (token) await signInWithCustomToken(auth, token);
+          }
+        } catch (err) {
+          console.error('SSO exchange failed:', err);
+        }
+      } else if (params.get('sso_error')) {
+        const code = params.get('sso_error');
+        console.warn('Commun SSO error:', code);
+        window.history.replaceState({}, document.title, window.location.pathname);
+        const messages: Record<string, string> = {
+          teachers_only: 'Commun sign-in is for teachers and staff only. Students can look up their borrowing by name in the Member Portal.',
+          disabled: 'Your Commun account is inactive. Please contact the library.',
+          replay: 'This sign-in link has already been used. Please launch the library again from Commun.',
+          invalid_ticket: 'Sign-in could not be verified. Please try launching the library again from Commun.',
+        };
+        if (code && messages[code]) {
+          // Defer so it doesn't block the initial paint.
+          setTimeout(() => alert(messages[code]), 0);
+        }
+      }
+    };
+    handleSsoHandoff();
+
     // Proactively restore cached session to prevent UI flickering on login under network issues
     const cachedSession = localStorage.getItem('zera_active_session');
     if (cachedSession) {
@@ -55,6 +93,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (firebaseUser) {
         setUser(firebaseUser);
+
+        // Trusted role from custom claims (set server-side for SSO users).
+        // Falls back to undefined for librarian (email/password) accounts, which
+        // keep their existing doc-based admin behaviour below.
+        let claimRole: UserProfile['role'] | undefined;
+        try {
+          const tokenResult = await firebaseUser.getIdTokenResult();
+          const r = tokenResult.claims.role;
+          if (r === 'admin' || r === 'teacher' || r === 'student') claimRole = r;
+        } catch { /* offline / token unavailable — ignore */ }
+
         // Fetch or create profile
         try {
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
@@ -79,6 +128,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               updated = true;
             }
 
+            // Trusted custom claim wins over a (client-writable) doc role.
+            if (claimRole && updatedData.role !== claimRole) {
+              updatedData.role = claimRole;
+              updated = true;
+            }
+
             if (updated) {
               await setDoc(doc(db, 'users', firebaseUser.uid), updatedData, { merge: true });
             }
@@ -94,7 +149,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               uid: firebaseUser.uid,
               name: derivedName,
               email: firebaseUser.email || '',
-              role: 'admin', // Auto-assign Admin/Librarian
+              // SSO users carry a trusted role claim; only librarian (claim-less)
+              // first-logins default to admin.
+              role: claimRole ?? 'admin',
               status: 'active',
               createdAt: serverTimestamp(),
               activeLoansCount: 0
@@ -126,7 +183,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               uid: firebaseUser.uid,
               name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
               email: firebaseUser.email,
-              role: 'admin', // Auto-assign Admin/Librarian
+              role: claimRole ?? 'admin',
               status: 'active',
               createdAt: new Date().toISOString(),
               activeLoansCount: 0

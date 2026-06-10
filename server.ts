@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import 'dotenv/config';
+import { registerSsoRoutes } from './src/server/sso/routes';
 
 const AP_STUDENTS = [
   {
@@ -447,6 +448,10 @@ async function startServer() {
     }
     next();
   });
+
+  // Commun Connected-Systems SSO (browser handoff + one-time custom-token exchange).
+  // Registered before the API routes and the Vite/static SPA catch-all.
+  registerSsoRoutes(app);
 
   // AI-Powered Book Synopsis & Details Enrichment endpoint using Google GenAI SDK (gemini-3.5-flash)
   app.post('/api/v1/enrich-book-ai', async (req, res) => {

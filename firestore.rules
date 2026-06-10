@@ -35,6 +35,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    // SSO-provisioned (Commun) users carry an `sso:true` custom claim. Their role
+    // is set server-side; they must never be able to self-assign the admin role.
+    function isSsoUser() {
+      return isSignedIn() && request.auth.token.get('sso', false) == true;
+    }
+
     // --- VALIDATION HELPERS ---
 
     function isValidUser(data) {
@@ -95,6 +101,21 @@ service cloud.firestore {
              (!('updatedAt' in data) || (data.updatedAt is string || data.updatedAt is timestamp));
     }
 
+    function isValidHold(data) {
+      return data.keys().hasAll(['bookId', 'userId', 'status', 'requestedAt']) &&
+             isValidId(data.bookId) &&
+             isValidId(data.userId) &&
+             data.status in ['pending', 'ready', 'fulfilled', 'cancelled', 'rejected'] &&
+             data.requestedAt is string && data.requestedAt.size() <= 100 &&
+             (!('bookTitle' in data) || (data.bookTitle is string && data.bookTitle.size() <= 200)) &&
+             (!('bookAuthor' in data) || (data.bookAuthor is string && data.bookAuthor.size() <= 200)) &&
+             (!('bookCoverUrl' in data) || (data.bookCoverUrl is string && data.bookCoverUrl.size() <= 1000)) &&
+             (!('userName' in data) || (data.userName is string && data.userName.size() <= 100)) &&
+             (!('userEmail' in data) || (data.userEmail is string && data.userEmail.size() <= 100)) &&
+             (!('userRole' in data) || (data.userRole is string && data.userRole.size() <= 50)) &&
+             (!('note' in data) || (data.note is string && data.note.size() <= 500));
+    }
+
     // --- COLLECTION RULES ---
 
     // 0. Connection Verification
@@ -103,39 +124,59 @@ service cloud.firestore {
     }
 
     // 1. Users
+    //  - Admins may write any profile (librarian management, sync, SDK provisioning).
+    //  - A user may write only their OWN profile, and an SSO user may never set role=admin.
     match /users/{userId} {
       allow read: if true; // Allows public lookups in Member Portal
-      allow write: if isSignedIn();
+      allow create, update: if isAdmin() ||
+        (isOwner(userId) && isValidUser(incoming()) && !(isSsoUser() && incoming().role == 'admin'));
+      allow delete: if isAdmin();
     }
 
-    // 2. Books
+    // 2. Books — public read; only admins (librarians) mutate the catalog.
     match /books/{bookId} {
       allow read: if true; // Public catalog search
-      allow write: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    // 3. Loans
+    // 3. Loans — public read for the borrowing portal; only admins create/return.
     match /loans/{loanId} {
       allow read: if true; // Public borrowing portal query list of loans
-      allow write: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    // 4. Acquisitions
+    // 4. Acquisitions — any authenticated user may request; only admins manage.
     match /acquisitions/{acquisitionId} {
       allow read: if true;
-      allow write: if isSignedIn();
+      allow create: if isSignedIn() && isValidAcquisition(incoming());
+      allow update, delete: if isAdmin();
     }
 
-    // 5. Inventory Sessions
+    // 5. Inventory Sessions — admin only.
     match /inventory_sessions/{sessionId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    // 6. Copies
+    // 6. Copies — public read; only admins mutate.
     match /copies/{copyId} {
       allow read: if true;
-      allow write: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // 7. Holds — member reservation requests.
+    //  - A member reads only their own holds; admins (librarians) read all.
+    //  - A member may create only their OWN pending hold.
+    //  - A member may only cancel their own hold; admins manage the lifecycle.
+    match /holds/{holdId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn()
+                       && incoming().userId == request.auth.uid
+                       && incoming().status == 'pending'
+                       && isValidHold(incoming());
+      allow update: if isAdmin()
+                       || (isOwner(existing().userId) && incoming().status == 'cancelled');
+      allow delete: if isAdmin();
     }
 
     // 7. Counters (Barcode sequence counters)
