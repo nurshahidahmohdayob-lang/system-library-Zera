@@ -4,6 +4,49 @@ import { Book } from '@/src/types';
 const lookupCache = new Map<string, Partial<Book>>();
 
 /**
+ * True when the text is an actual synopsis rather than one of the
+ * system-generated placeholder strings stamped on records with no abstract.
+ */
+export function isRealSynopsis(text?: string | null): text is string {
+  if (!text) return false;
+  const t = text.trim();
+  return t.length >= 15 &&
+    t !== 'Institutional asset for Zera Education.' &&
+    t !== 'No explicit abstract provided for this asset.' &&
+    t !== 'Catalogued via automatic batch sync module.' &&
+    t !== 'No synopsis/abstract available in public bibliographic databases.' &&
+    !t.startsWith('Institutional archive record for');
+}
+
+/**
+ * Fetches a synopsis/plot summary from the web (Google Books, Open Library,
+ * LOC — with the server's AI fallback) for a book identified by title and/or ISBN.
+ * Returns '' when nothing genuine could be found.
+ */
+export async function fetchSynopsisFromWeb(book: Partial<Book>): Promise<string> {
+  if (!book.title && !book.isbn) return '';
+  try {
+    const res = await fetch('/api/v1/enrich-book-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: book.title || '',
+        author: book.author || '',
+        isbn: book.isbn || '',
+        description: isRealSynopsis(book.description) ? book.description : ''
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (isRealSynopsis(data?.description)) return data.description.trim();
+    }
+  } catch (err) {
+    console.warn('Web synopsis lookup failed:', err);
+  }
+  return '';
+}
+
+/**
  * Enriches any partial book record with complete details (cover, summary, publisher, subjects)
  * by looking up additional databases if fields are missing.
  */
@@ -71,9 +114,12 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
     }
   }
 
-  // Clean values so they never show up as empty
+  // Clean values so they never show up as empty.
+  // Note: description deliberately stays empty when no real synopsis was found —
+  // callers then fetch one from the web (fetchSynopsisFromWeb) instead of
+  // storing a placeholder string.
   if (!enriched.description) {
-    enriched.description = `Institutional archive record for "${enriched.title || 'Untitled Book'}". Catalogued with Z39.50 Academic Autoconnect Protocol.`;
+    enriched.description = '';
   }
   if (!enriched.category) {
     enriched.category = 'General';

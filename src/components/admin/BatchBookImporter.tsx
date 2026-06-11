@@ -23,7 +23,7 @@ import { db, auth } from '@/src/lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { BarcodeService } from '@/src/services/BarcodeService';
-import { lookupBookByIsbn, lookupBookByTitle } from '@/src/services/catalogService';
+import { lookupBookByIsbn, lookupBookByTitle, isRealSynopsis } from '@/src/services/catalogService';
 
 enum OperationType {
   CREATE = 'create',
@@ -347,7 +347,11 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
         const isbnToUse = matchedBook?.isbn || currentJob.row.isbn || '';
         const coverToUse = matchedBook?.coverUrl || syncedCover;
         const categoryToUse = matchedBook?.category || currentJob.row.category || 'Fiction';
-        const descToUse = currentJob.row.description || matchedBook?.description || 'Catalogued via automatic batch sync module.';
+        // Only treat a genuine synopsis as "already known" — placeholder strings
+        // stamped by enrichBookDetails would otherwise suppress the server-side
+        // title/ISBN synopsis search below.
+        const descToUse = currentJob.row.description?.trim()
+          || (isRealSynopsis(matchedBook?.description) ? matchedBook!.description! : '');
         const publisherToUse = matchedBook?.publisher || 'Zera Archives';
         const yearToUse = matchedBook?.publishedYear || new Date().getFullYear();
         const subjectsToUse = matchedBook?.subjects || [categoryToUse];
@@ -361,10 +365,12 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              title: titleToUse,
-              author: authorToUse,
+              // Don't send the 'Untitled Book' fallback — a title search on it could
+              // match a wrong book; the server can look up by ISBN alone.
+              title: titleToUse !== 'Untitled Book' ? titleToUse : '',
+              author: authorToUse !== 'Unknown Author' ? authorToUse : '',
               isbn: isbnToUse,
-              description: descToUse !== 'Catalogued via automatic batch sync module.' ? descToUse : ''
+              description: descToUse
             })
           });
           if (enrichRes.ok) {
@@ -374,7 +380,9 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           console.warn("AI enrichment during batch import timed out/failed:", err);
         }
 
-        const finalDesc = currentJob.row.description || enrichedDetails?.description || descToUse;
+        const finalDesc = currentJob.row.description?.trim()
+          || [enrichedDetails?.description, matchedBook?.description].find(isRealSynopsis)
+          || 'No synopsis/abstract available in public bibliographic databases.';
         const finalAuthor = enrichedDetails?.author || authorToUse;
         const finalCategory = enrichedDetails?.category || categoryToUse;
         const finalPublisher = enrichedDetails?.publisher || publisherToUse;

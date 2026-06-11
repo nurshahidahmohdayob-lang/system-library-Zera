@@ -455,11 +455,19 @@ async function startServer() {
 
   // AI-Powered Book Synopsis & Details Enrichment endpoint using Google GenAI SDK (gemini-3.5-flash)
   app.post('/api/v1/enrich-book-ai', async (req, res) => {
-    const { title, author, isbn, description } = req.body;
-    
-    if (!title) {
-      return res.status(400).json({ error: 'Title is required' });
+    const { title: rawTitle, author, isbn, description: rawDescription } = req.body;
+    const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
+
+    if (!title && !isbn) {
+      return res.status(400).json({ error: 'Title or ISBN is required' });
     }
+
+    // Treat system-generated placeholder strings as "no description" so they
+    // never suppress the real synopsis lookup below.
+    const placeholderDescRx = /^(Catalogued via automatic batch sync module\.|Institutional asset for Zera Education\.|No explicit abstract provided for this asset\.|No synopsis\/abstract available in public bibliographic databases\.|Institutional archive record for)/;
+    const description = typeof rawDescription === 'string' && rawDescription.trim().length >= 15 && !placeholderDescRx.test(rawDescription.trim())
+      ? rawDescription.trim()
+      : '';
 
     // Advanced dynamic WorldCat & Z39.50 multi-source catalog metadata retriever
     const fetchWorldCataloguingData = async (
@@ -481,6 +489,24 @@ async function startServer() {
           clearTimeout(timeoutId);
           throw err;
         }
+      };
+
+      // Open Library keeps real synopses on the *work* record, not the edition —
+      // this is the most reliable free source when Google Books is quota-limited.
+      const fetchOpenLibraryWorkDesc = async (workKey: string): Promise<string> => {
+        try {
+          const res = await fetchWithTimeout(`https://openlibrary.org${workKey}.json`, 2500);
+          if (res.ok) {
+            const work = await res.json();
+            const d = work.description;
+            const text = typeof d === 'string' ? d : (d && typeof d.value === 'string' ? d.value : '');
+            // Open Library descriptions often end with a "----------\nAlso contained in:" trailer
+            return text.split(/\r?\n-{4,}/)[0].trim();
+          }
+        } catch {
+          console.log('[WorldCatalog] Open Library work description lookup bypassed or unavailable.');
+        }
+        return '';
       };
 
       let fetchedDesc = existingDesc || '';
@@ -561,6 +587,26 @@ async function startServer() {
             }
           }
 
+          // B2. Resolve the ISBN to its Open Library *work* record for a true synopsis
+          if (!fetchedDesc || fetchedDesc.trim().length === 0) {
+            try {
+              const res = await fetchWithTimeout(`https://openlibrary.org/isbn/${cleanIsbn}.json`, 2500);
+              if (res.ok) {
+                const edition = await res.json();
+                const workKey = edition.works?.[0]?.key;
+                if (workKey) {
+                  const workDesc = await fetchOpenLibraryWorkDesc(workKey);
+                  if (workDesc) {
+                    fetchedDesc = workDesc;
+                    sourceUsed = 'OpenLibrary Work (ISBN)';
+                  }
+                }
+              }
+            } catch (err) {
+              console.log("[WorldCatalog] ISBN-to-work resolution via OpenLibrary bypassed or unavailable.");
+            }
+          }
+
           // C. Try LOC (Library of Congress) SRU Z39.50 Gateway
           if (!fetchedDesc || fetchedDesc.trim().length === 0) {
             try {
@@ -623,8 +669,13 @@ async function startServer() {
               const data = await res.json();
               if (data.docs && data.docs.length > 0) {
                 const doc = data.docs[0];
-                if (doc.first_sentence && doc.first_sentence.value) {
-                  fetchedDesc = doc.first_sentence.value;
+                if (doc.key) {
+                  const workDesc = await fetchOpenLibraryWorkDesc(doc.key);
+                  if (workDesc) fetchedDesc = workDesc;
+                }
+                if ((!fetchedDesc || fetchedDesc.trim().length < 15) && doc.first_sentence) {
+                  const firstSentence = Array.isArray(doc.first_sentence) ? doc.first_sentence[0] : doc.first_sentence.value;
+                  if (firstSentence) fetchedDesc = firstSentence;
                 }
                 if (!fetchedPublisher && doc.publisher && doc.publisher.length > 0) {
                   fetchedPublisher = doc.publisher[0];
@@ -647,6 +698,39 @@ async function startServer() {
             }
           } catch (err) {
             console.log("[WorldCatalog] Title query via OpenLibrary bypassed or unavailable.");
+          }
+        }
+      }
+
+      // 3. Wikipedia page-summary fallback — popular titles often have a real
+      // encyclopedic blurb even when book APIs return nothing, junk reader
+      // comments, or a description in another language.
+      const looksEnglish = (text: string): boolean => {
+        const hits = text.slice(0, 300).toLowerCase().match(/\b(the|and|of|to|in|is|was|with|for|that)\b/g);
+        return (hits?.length || 0) >= 2;
+      };
+      if ((!fetchedDesc || fetchedDesc.trim().length < 50 || !looksEnglish(fetchedDesc)) && t) {
+        const cleanTitle = t.replace(/\.[a-zA-Z0-9]+$/, '').replace(/\(.*?\)|\[.*?\]/g, '').trim();
+        const authorSurname = (a || '').trim().split(/\s+/).pop()?.toLowerCase() || '';
+        // Book articles for ambiguous titles usually live at "Title (novel)";
+        // the bare title may be a disambiguation page or an unrelated topic.
+        for (const candidate of [`${cleanTitle} (novel)`, cleanTitle]) {
+          try {
+            const res = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(candidate)}`, 2500);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const extract = (data.extract || '').trim();
+            // Guard against grabbing an unrelated article: the page must read like
+            // it is about a book, or at least mention the author.
+            const looksLikeBook = /\b(book|novel|novella|memoir|biography|autobiography|story|stories|anthology|picture book|poem|poetry)\b/i.test(extract)
+              || (authorSurname.length > 2 && extract.toLowerCase().includes(authorSurname));
+            if (data.type === 'standard' && extract.length >= 60 && looksLikeBook) {
+              fetchedDesc = extract;
+              sourceUsed = 'Wikipedia (Page Summary)';
+              break;
+            }
+          } catch (err) {
+            console.log("[WorldCatalog] Wikipedia summary lookup bypassed or unavailable.");
           }
         }
       }

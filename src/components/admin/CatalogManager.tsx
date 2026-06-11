@@ -23,7 +23,7 @@ import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
-import { lookupBookByIsbn } from '@/src/services/catalogService';
+import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, isRealSynopsis } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles } from 'lucide-react';
 
@@ -41,6 +41,7 @@ export const CatalogManager = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
   const [newBook, setNewBook] = useState<Partial<Book>>({
     title: '',
@@ -72,10 +73,20 @@ export const CatalogManager = () => {
       // Show books that are active or haven't been assigned a status yet (new registrations default to active)
       const activeBooks = allBooks.filter(book => book.status !== 'archived');
       setBooks(activeBooks.sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+      // Drop selections that no longer exist in the catalog
+      setSelectedIds(prev => new Set([...prev].filter(id => activeBooks.some(b => b.id === id))));
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  // Make sure a looked-up draft carries a genuine web synopsis before it
+  // reaches the form, so the librarian sees (and can tweak) the real abstract.
+  const withWebSynopsis = async (draft: Partial<Book>): Promise<Partial<Book>> => {
+    if (isRealSynopsis(draft.description)) return draft;
+    const synopsis = await fetchSynopsisFromWeb(draft);
+    return synopsis ? { ...draft, description: synopsis } : draft;
+  };
 
   const handleIsbnLookup = async () => {
     if (!newBook.isbn) return;
@@ -83,7 +94,8 @@ export const CatalogManager = () => {
     try {
       const data = await lookupBookByIsbn(newBook.isbn);
       if (data) {
-        setNewBook(prev => ({ ...prev, ...data }));
+        const merged = await withWebSynopsis({ ...newBook, ...data });
+        setNewBook(merged);
       } else {
         alert("Metadata not found for this ISBN. Please enter details manually.");
       }
@@ -94,6 +106,28 @@ export const CatalogManager = () => {
     }
   };
 
+
+  const handleTitleLookup = async () => {
+    if (!newBook.title?.trim()) return;
+    setIsSearching(true);
+    try {
+      const matches = await lookupBookByTitle(newBook.title);
+      if (matches && matches.length > 0) {
+        // Drop empty fields from the match so they don't wipe values already typed in
+        const cleaned = Object.fromEntries(
+          Object.entries(matches[0]).filter(([, v]) => v !== undefined && v !== null && v !== '')
+        ) as Partial<Book>;
+        const merged = await withWebSynopsis({ ...newBook, ...cleaned });
+        setNewBook(merged);
+      } else {
+        alert("No metadata found for this title. Please enter details manually.");
+      }
+    } catch (err) {
+      alert("Error connecting to metadata service.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   const handleAutoBarcode = async () => {
     setIsSearching(true);
@@ -115,16 +149,27 @@ export const CatalogManager = () => {
     setSaving(true);
 
     try {
+      // If no synopsis was provided, look one up on the web before storing so
+      // every catalogued title carries an abstract for the detail view.
+      let bookToSave = { ...newBook };
+      if (!isRealSynopsis(bookToSave.description)) {
+        const synopsis = await fetchSynopsisFromWeb(bookToSave);
+        if (synopsis) {
+          bookToSave = { ...bookToSave, description: synopsis };
+          setNewBook(prev => ({ ...prev, description: synopsis }));
+        }
+      }
+
       if (editingBook) {
         await updateDoc(doc(db, 'books', editingBook.id), {
-          ...newBook,
+          ...bookToSave,
           updatedAt: now
         });
         setEditingBook(null);
       } else {
         await addDoc(collection(db, 'books'), {
-          ...newBook,
-          availableCopies: newBook.totalCopies,
+          ...bookToSave,
+          availableCopies: bookToSave.totalCopies,
           status: 'active',
           createdAt: now,
           updatedAt: now
@@ -166,6 +211,73 @@ export const CatalogManager = () => {
       coverUrl: book.coverUrl
     });
     setIsAdding(true);
+  };
+
+  // Replaces a stored placeholder/missing description with a real synopsis
+  // looked up on the web, directly from the detail view.
+  const handleRefreshSynopsis = async () => {
+    if (!selectedBookForView) return;
+    setSaving(true);
+    try {
+      const synopsis = await fetchSynopsisFromWeb(selectedBookForView);
+      if (synopsis) {
+        await updateDoc(doc(db, 'books', selectedBookForView.id), {
+          description: synopsis,
+          updatedAt: new Date().toISOString()
+        });
+        setSelectedBookForView({ ...selectedBookForView, description: synopsis });
+      } else {
+        alert("No synopsis found on the web for this title/ISBN.");
+      }
+    } catch (error) {
+      alert("Failed to update synopsis: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Permanently delete ${selectedIds.size} selected book${selectedIds.size !== 1 ? 's' : ''}? Their copies and loan records will also be removed. This action cannot be undone.`)) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      for (const id of selectedIds) {
+        // Remove the book's copies and loan records too, so nothing is orphaned
+        const copiesSnap = await getDocs(query(collection(db, 'copies'), where('bookId', '==', id)));
+        for (const copyDoc of copiesSnap.docs) {
+          await deleteDoc(doc(db, 'copies', copyDoc.id));
+        }
+        const loansSnap = await getDocs(query(collection(db, 'loans'), where('bookId', '==', id)));
+        for (const loanDoc of loansSnap.docs) {
+          await deleteDoc(doc(db, 'loans', loanDoc.id));
+        }
+        await deleteDoc(doc(db, 'books', id));
+      }
+      if (selectedBookForView && selectedIds.has(selectedBookForView.id)) {
+        setSelectedBookForView(null);
+      }
+      setSelectedIds(new Set());
+    } catch (error) {
+      console.error(error);
+      alert("Failed to delete selected books: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id: string, e?: React.MouseEvent) => {
@@ -211,39 +323,19 @@ export const CatalogManager = () => {
           </div>
         </div>
         <div className="flex gap-3">
-          <button 
-            type="button"
-            onClick={async () => {
-              if (window.confirm("Are you sure you want to permanently delete ALL book catalog records, copies, and loans? This action is extremely destructive and cannot be undone.")) {
-                setSaving(true);
-                try {
-                  const booksSnap = await getDocs(collection(db, 'books'));
-                  for (const docRef of booksSnap.docs) {
-                    await deleteDoc(doc(db, 'books', docRef.id));
-                  }
-                  const copiesSnap = await getDocs(collection(db, 'copies'));
-                  for (const docRef of copiesSnap.docs) {
-                    await deleteDoc(doc(db, 'copies', docRef.id));
-                  }
-                  const loansSnap = await getDocs(collection(db, 'loans'));
-                  for (const docRef of loansSnap.docs) {
-                    await deleteDoc(doc(db, 'loans', docRef.id));
-                  }
-                  alert("Successfully deleted all books, copies, and active/completed loans.");
-                } catch (error) {
-                  alert("Failed to delete all book data: " + (error instanceof Error ? error.message : String(error)));
-                } finally {
-                  setSaving(false);
-                }
-              }
-            }}
-            className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 text-white hover:bg-rose-700 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider hover:scale-[1.01]"
-            title="Permanently erase all bibliographic records, item copies, and loan transactions from Firestore."
-          >
-            <Trash2 className="w-4 h-4" />
-            Delete All Book Data
-          </button>
-          <button 
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={handleDeleteSelected}
+              className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 text-white hover:bg-rose-700 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider hover:scale-[1.01] disabled:opacity-50"
+              title="Permanently delete the selected books along with their copies and loan records."
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Delete Selected ({selectedIds.size})
+            </button>
+          )}
+          <button
             type="button"
             onClick={() => setIsBatchImporting(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-zera-yellow text-zera-emerald-dark hover:brightness-95 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
@@ -283,9 +375,8 @@ export const CatalogManager = () => {
                   <div className="flex gap-2">
                     <div className="relative flex-1">
                       <BookIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
-                      <input 
-                        required
-                        placeholder="ISBN-10 or ISBN-13"
+                      <input
+                        placeholder="ISBN-10 or ISBN-13 (optional)"
                         className="w-full pl-9 pr-3 py-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald font-mono" 
                         value={newBook.isbn} onChange={e => setNewBook({...newBook, isbn: e.target.value})}
                       />
@@ -341,12 +432,23 @@ export const CatalogManager = () => {
             <div className="grid grid-cols-2 gap-4">
                <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Book Title</label>
-                <input 
-                  required
-                  placeholder="Official Title"
-                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text font-bold" 
-                  value={newBook.title} onChange={e => setNewBook({...newBook, title: e.target.value})}
-                />
+                <div className="flex gap-2">
+                  <input
+                    required
+                    placeholder="Official Title"
+                    className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text font-bold"
+                    value={newBook.title} onChange={e => setNewBook({...newBook, title: e.target.value})}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTitleLookup}
+                    disabled={isSearching || !newBook.title?.trim()}
+                    className="p-3 bg-zera-emerald text-white rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity shadow-sm shrink-0"
+                    title="Look up metadata & synopsis by title"
+                  >
+                    {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Primary Author</label>
@@ -445,9 +547,10 @@ export const CatalogManager = () => {
 
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Book Synopsis</label>
-              <textarea 
+              <textarea
                 rows={3}
-                className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text leading-relaxed" 
+                placeholder="Leave blank to automatically fetch the plot/synopsis from the web when saving."
+                className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text leading-relaxed"
                 value={newBook.description} onChange={e => setNewBook({...newBook, description: e.target.value})}
               />
             </div>
@@ -500,6 +603,21 @@ export const CatalogManager = () => {
           <table className="w-full text-sm text-left min-w-[1000px]">
             <thead className="bg-natural-bg text-natural-muted text-[10px] uppercase font-black tracking-widest border-b border-natural-border">
             <tr>
+              <th className="pl-8 pr-2 py-5 w-12">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-zera-emerald cursor-pointer"
+                  title="Select all books on this page"
+                  checked={paginatedBooks.length > 0 && paginatedBooks.every(b => selectedIds.has(b.id))}
+                  onChange={e => {
+                    setSelectedIds(prev => {
+                      const next = new Set(prev);
+                      paginatedBooks.forEach(b => e.target.checked ? next.add(b.id) : next.delete(b.id));
+                      return next;
+                    });
+                  }}
+                />
+              </th>
               <th className="px-8 py-5">Barcode</th>
               <th className="px-8 py-5">ISBN</th>
               <th className="px-8 py-5">Title & Author</th>
@@ -513,8 +631,19 @@ export const CatalogManager = () => {
               <tr 
                 key={book.id} 
                 onClick={() => setSelectedBookForView(book)}
-                className="hover:bg-natural-bg/40 transition-colors group cursor-pointer"
+                className={cn(
+                  "hover:bg-natural-bg/40 transition-colors group cursor-pointer",
+                  selectedIds.has(book.id) && "bg-rose-50/50"
+                )}
               >
+                <td className="pl-8 pr-2 py-5 w-12" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-zera-emerald cursor-pointer"
+                    checked={selectedIds.has(book.id)}
+                    onChange={() => toggleSelect(book.id)}
+                  />
+                </td>
                 <td className="px-8 py-5 font-mono text-[10px] text-natural-muted uppercase font-bold tracking-tighter">
                   <div className="text-zera-emerald">{book.barcode || `ZERA-${book.isbn.slice(-6)}`}</div>
                 </td>
@@ -688,9 +817,22 @@ export const CatalogManager = () => {
               </div>
 
               <div className="space-y-3">
-                 <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-natural-muted mb-1">Administrative Description</h4>
+                 <div className="flex items-center justify-between mb-1">
+                   <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-natural-muted">Synopsis</h4>
+                   <button
+                     onClick={handleRefreshSynopsis}
+                     disabled={saving}
+                     className="flex items-center gap-1.5 px-3 py-1.5 bg-zera-emerald/10 text-zera-emerald rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-zera-emerald/20 transition-all disabled:opacity-50"
+                     title="Look up the plot/synopsis on the web and save it to this record"
+                   >
+                     {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCcw className="w-3 h-3" />}
+                     Fetch Synopsis from Web
+                   </button>
+                 </div>
                  <p className="text-natural-text font-serif leading-relaxed text-base">
-                   {selectedBookForView.description || `No explicit abstract provided for this asset.`}
+                   {isRealSynopsis(selectedBookForView.description)
+                     ? selectedBookForView.description
+                     : `No synopsis stored yet — use "Fetch Synopsis from Web" above.`}
                  </p>
               </div>
 
