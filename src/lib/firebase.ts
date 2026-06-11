@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDocFromServer } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDocFromServer, connectFirestoreEmulator } from 'firebase/firestore';
 import firebaseConfig from '@/firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -17,6 +17,15 @@ export const db = initializeFirestore(app, {
 }, dbId);
 
 export const auth = getAuth(app);
+
+// Local dev against the Firebase Emulator Suite (never in production builds).
+// Gated behind an explicit env var so plain `npm run dev` still talks to the
+// live database — use `npm run dev:emulator` alongside `npm run emulators`.
+// Must run before any Firestore/Auth operation (including testConnection below).
+if (import.meta.env.DEV && import.meta.env.VITE_USE_EMULATOR === 'true') {
+  connectFirestoreEmulator(db, 'localhost', 8080);
+  connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
+}
 
 // Connectivity check as per instructions
 async function testConnection() {

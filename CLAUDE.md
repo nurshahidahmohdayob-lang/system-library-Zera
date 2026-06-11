@@ -13,6 +13,8 @@ Originally scaffolded as a Google AI Studio app (note the `react-example` packag
 ```bash
 npm install            # install deps
 npm run dev            # run Express+Vite dev server (tsx server.ts) — this is the entry point, NOT `vite`
+npm run emulators      # start Firebase Emulator Suite (Firestore :8080, Auth :9099, UI :4000); needs Java
+npm run dev:emulator   # dev server pointed at the emulators (VITE_USE_EMULATOR=true) instead of prod Firestore
 npm run build          # vite build (client) + esbuild bundle server.ts -> dist/server.cjs
 npm start              # run production bundle (node dist/server.cjs), expects NODE_ENV=production
 npm run lint           # tsc --noEmit && eslint .  — run this to typecheck; there is no test suite

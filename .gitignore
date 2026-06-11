@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Firebase Emulator Suite
+.emulator-data/
+.firebase/

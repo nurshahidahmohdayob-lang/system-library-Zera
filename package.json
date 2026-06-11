@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:emulator": "VITE_USE_EMULATOR=true tsx server.ts",
+    "emulators": "npx -y firebase-tools emulators:start --project demo-zera --import=./.emulator-data --export-on-exit",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist",
