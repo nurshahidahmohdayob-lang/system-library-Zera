@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
-import { Search, Book as BookIcon, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check } from 'lucide-react';
+import { Search, Book as BookIcon, BookOpen, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '@/src/hooks/useAuth';
@@ -346,6 +346,17 @@ export const BookGrid = () => {
                       <p className="text-sm font-bold text-zera-emerald">{selectedBook.language} • {selectedBook.pageCount ? `${selectedBook.pageCount}pp` : ''}</p>
                     </div>
                   </div>
+                  {selectedBook.lexileLevel && (
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald">
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Lexile Reading Level</p>
+                        <p className="text-sm font-bold text-zera-emerald font-mono">{selectedBook.lexileLevel}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-3">

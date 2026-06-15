@@ -141,6 +141,29 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
 }
 
 /**
+ * Fetches the official Lexile reading measure (e.g. "740L", "AD580L") for a
+ * book from the MetaMetrics Find-a-Book database via the server proxy.
+ * Returns '' when the book has no published measure.
+ */
+export async function fetchLexileFromWeb(book: Partial<Book>): Promise<string> {
+  if (!book.title && !book.isbn) return '';
+  try {
+    const params = new URLSearchParams();
+    if (book.title) params.set('title', book.title);
+    if (book.author) params.set('author', book.author);
+    if (book.isbn) params.set('isbn', book.isbn);
+    const res = await fetch(`/api/v1/lexile?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (typeof data?.lexileLevel === 'string' && data.lexileLevel) return data.lexileLevel;
+    }
+  } catch (err) {
+    console.warn('Lexile lookup failed:', err);
+  }
+  return '';
+}
+
+/**
  * Simulates a Z39.50/Library server lookup using multi-source aggregation (Google Books & Open Library).
  * This provides the depth of metadata typically found in library catalog systems.
  */

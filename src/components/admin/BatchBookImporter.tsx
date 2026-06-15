@@ -408,6 +408,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           publishedYear: finalYear,
           subjects: finalSubjects,
           pageCount: finalPageCount,
+          lexileLevel: enrichedDetails?.lexileLevel || '',
           language: languageToUse,
           totalCopies: currentJob.row.copies,
           availableCopies: currentJob.row.copies,

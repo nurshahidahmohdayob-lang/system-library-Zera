@@ -23,7 +23,7 @@ import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
-import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, isRealSynopsis } from '@/src/services/catalogService';
+import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, isRealSynopsis } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles } from 'lucide-react';
 
@@ -56,6 +56,7 @@ export const CatalogManager = () => {
     language: 'English',
     pageCount: 0,
     dimensions: '',
+    lexileLevel: '',
     totalCopies: 1,
     availableCopies: 1,
     coverUrl: ''
@@ -80,12 +81,19 @@ export const CatalogManager = () => {
     return () => unsubscribe();
   }, []);
 
-  // Make sure a looked-up draft carries a genuine web synopsis before it
-  // reaches the form, so the librarian sees (and can tweak) the real abstract.
+  // Make sure a looked-up draft carries a genuine web synopsis and a Lexile
+  // measure before it reaches the form, so the librarian sees (and can tweak)
+  // the real values.
   const withWebSynopsis = async (draft: Partial<Book>): Promise<Partial<Book>> => {
-    if (isRealSynopsis(draft.description)) return draft;
-    const synopsis = await fetchSynopsisFromWeb(draft);
-    return synopsis ? { ...draft, description: synopsis } : draft;
+    const [synopsis, lexile] = await Promise.all([
+      isRealSynopsis(draft.description) ? Promise.resolve('') : fetchSynopsisFromWeb(draft),
+      draft.lexileLevel ? Promise.resolve('') : fetchLexileFromWeb(draft)
+    ]);
+    return {
+      ...draft,
+      ...(synopsis ? { description: synopsis } : {}),
+      ...(lexile ? { lexileLevel: lexile } : {})
+    };
   };
 
   const handleIsbnLookup = async () => {
@@ -149,15 +157,12 @@ export const CatalogManager = () => {
     setSaving(true);
 
     try {
-      // If no synopsis was provided, look one up on the web before storing so
-      // every catalogued title carries an abstract for the detail view.
+      // If no synopsis or Lexile level was provided, look them up on the web
+      // before storing so every catalogued title carries them.
       let bookToSave = { ...newBook };
-      if (!isRealSynopsis(bookToSave.description)) {
-        const synopsis = await fetchSynopsisFromWeb(bookToSave);
-        if (synopsis) {
-          bookToSave = { ...bookToSave, description: synopsis };
-          setNewBook(prev => ({ ...prev, description: synopsis }));
-        }
+      if (!isRealSynopsis(bookToSave.description) || !bookToSave.lexileLevel) {
+        bookToSave = await withWebSynopsis(bookToSave);
+        setNewBook(prev => ({ ...prev, description: bookToSave.description, lexileLevel: bookToSave.lexileLevel }));
       }
 
       if (editingBook) {
@@ -179,10 +184,10 @@ export const CatalogManager = () => {
       // Close modal and clear data ONLY after successful save
       setIsAdding(false);
       setNewBook({ 
-        title: '', author: '', series: '', isbn: '', barcode: '', category: 'Fiction', 
+        title: '', author: '', series: '', isbn: '', barcode: '', category: 'Fiction',
         description: '', publisher: '', publishedYear: new Date().getFullYear(),
-        language: 'English', pageCount: 0, dimensions: '',
-        totalCopies: 1, availableCopies: 1, coverUrl: '' 
+        language: 'English', pageCount: 0, dimensions: '', lexileLevel: '',
+        totalCopies: 1, availableCopies: 1, coverUrl: ''
       });
     } catch (error) {
       console.error("Catalog Save Error:", error);
@@ -206,6 +211,7 @@ export const CatalogManager = () => {
       language: book.language || 'English',
       pageCount: book.pageCount || 0,
       dimensions: book.dimensions || '',
+      lexileLevel: book.lexileLevel || '',
       totalCopies: book.totalCopies,
       availableCopies: book.availableCopies,
       coverUrl: book.coverUrl
@@ -213,26 +219,63 @@ export const CatalogManager = () => {
     setIsAdding(true);
   };
 
-  // Replaces a stored placeholder/missing description with a real synopsis
-  // looked up on the web, directly from the detail view.
+  // Replaces a stored placeholder/missing description and missing Lexile level
+  // with real values looked up on the web, directly from the detail view.
   const handleRefreshSynopsis = async () => {
     if (!selectedBookForView) return;
     setSaving(true);
     try {
-      const synopsis = await fetchSynopsisFromWeb(selectedBookForView);
-      if (synopsis) {
-        await updateDoc(doc(db, 'books', selectedBookForView.id), {
-          description: synopsis,
-          updatedAt: new Date().toISOString()
-        });
-        setSelectedBookForView({ ...selectedBookForView, description: synopsis });
+      const [synopsis, lexile] = await Promise.all([
+        fetchSynopsisFromWeb(selectedBookForView),
+        fetchLexileFromWeb(selectedBookForView)
+      ]);
+      if (synopsis || lexile) {
+        const updates: Partial<Book> & { updatedAt: string } = { updatedAt: new Date().toISOString() };
+        if (synopsis) updates.description = synopsis;
+        if (lexile) updates.lexileLevel = lexile;
+        await updateDoc(doc(db, 'books', selectedBookForView.id), updates);
+        setSelectedBookForView({ ...selectedBookForView, ...updates });
       } else {
-        alert("No synopsis found on the web for this title/ISBN.");
+        alert("No synopsis or Lexile measure found on the web for this title/ISBN.");
       }
     } catch (error) {
-      alert("Failed to update synopsis: " + (error instanceof Error ? error.message : String(error)));
+      alert("Failed to update book details: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Walks the whole catalogue and fills in the Lexile level for every book
+  // that doesn't have one yet.
+  const [lexileSync, setLexileSync] = useState<{ current: number; total: number } | null>(null);
+  const handleSyncLexileLevels = async () => {
+    const missing = books.filter(b => !b.lexileLevel);
+    if (missing.length === 0) {
+      alert("All catalogued books already have a Lexile level (where one exists).");
+      return;
+    }
+    if (!window.confirm(`Look up Lexile reading levels for ${missing.length} book${missing.length !== 1 ? 's' : ''} without one? This may take a few minutes.`)) {
+      return;
+    }
+    setLexileSync({ current: 0, total: missing.length });
+    let found = 0;
+    try {
+      for (let i = 0; i < missing.length; i++) {
+        setLexileSync({ current: i + 1, total: missing.length });
+        const lexile = await fetchLexileFromWeb(missing[i]);
+        if (lexile) {
+          await updateDoc(doc(db, 'books', missing[i].id), {
+            lexileLevel: lexile,
+            updatedAt: new Date().toISOString()
+          });
+          found++;
+        }
+      }
+      alert(`Lexile sync complete: measures found and saved for ${found} of ${missing.length} books. Books without a result have no published Lexile measure.`);
+    } catch (error) {
+      alert("Lexile sync stopped: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setLexileSync(null);
     }
   };
 
@@ -335,6 +378,16 @@ export const CatalogManager = () => {
               Delete Selected ({selectedIds.size})
             </button>
           )}
+          <button
+            type="button"
+            disabled={lexileSync !== null || saving}
+            onClick={handleSyncLexileLevels}
+            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-zera-emerald/30 text-zera-emerald hover:bg-zera-emerald/5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider disabled:opacity-60"
+            title="Look up the Lexile reading level for every catalogued book that doesn't have one yet."
+          >
+            {lexileSync ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {lexileSync ? `Lexile ${lexileSync.current}/${lexileSync.total}` : 'Sync Lexile Levels'}
+          </button>
           <button
             type="button"
             onClick={() => setIsBatchImporting(true)}
@@ -472,7 +525,7 @@ export const CatalogManager = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Subject Category</label>
                 <select 
@@ -498,11 +551,19 @@ export const CatalogManager = () => {
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Year</label>
-                <input 
+                <input
                   type="number"
                   placeholder="YYYY"
-                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text" 
+                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text"
                   value={newBook.publishedYear} onChange={e => setNewBook({...newBook, publishedYear: parseInt(e.target.value)})}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Lexile Level</label>
+                <input
+                  placeholder="Auto e.g. 740L"
+                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text font-mono"
+                  value={newBook.lexileLevel} onChange={e => setNewBook({...newBook, lexileLevel: e.target.value})}
                 />
               </div>
             </div>
@@ -814,6 +875,15 @@ export const CatalogManager = () => {
                     <p className="text-sm font-bold text-zera-emerald">{selectedBookForView.pageCount ? `${selectedBookForView.pageCount}pp` : ''} {selectedBookForView.dimensions} {selectedBookForView.language}</p>
                   </div>
                 </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Lexile Reading Level</p>
+                    <p className="text-sm font-bold text-zera-emerald font-mono">{selectedBookForView.lexileLevel || 'Not measured'}</p>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -823,10 +893,10 @@ export const CatalogManager = () => {
                      onClick={handleRefreshSynopsis}
                      disabled={saving}
                      className="flex items-center gap-1.5 px-3 py-1.5 bg-zera-emerald/10 text-zera-emerald rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-zera-emerald/20 transition-all disabled:opacity-50"
-                     title="Look up the plot/synopsis on the web and save it to this record"
+                     title="Look up the plot/synopsis and Lexile reading level on the web and save them to this record"
                    >
                      {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCcw className="w-3 h-3" />}
-                     Fetch Synopsis from Web
+                     Fetch Synopsis & Lexile from Web
                    </button>
                  </div>
                  <p className="text-natural-text font-serif leading-relaxed text-base">

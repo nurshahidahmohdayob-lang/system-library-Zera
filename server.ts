@@ -454,6 +454,91 @@ async function startServer() {
   registerSsoRoutes(app);
 
   // AI-Powered Book Synopsis & Details Enrichment endpoint using Google GenAI SDK (gemini-3.5-flash)
+  // Lexile reading-level lookup via the free MetaMetrics "Find a Book" search
+  // (the same backend hub.lexile.com uses). Returns a display measure like
+  // "740L" or "AD580L", or null when the book has no published measure.
+  const lookupLexileMeasure = async (title?: string, author?: string, isbn?: string): Promise<string | null> => {
+    const searchLexile = async (term: string): Promise<any[]> => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      try {
+        const res = await fetch('https://atlas-fab.lexile.com/free/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json; version=1.0' },
+          body: JSON.stringify({ term }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data?.data?.results || [];
+      } catch {
+        clearTimeout(timeoutId);
+        return [];
+      }
+    };
+
+    const formatMeasure = (r: any): string | null => {
+      const m = r?.measurements?.english;
+      if (!m || !m.measurable || m.lexile === null || m.lexile === undefined) return null;
+      return `${m.lexile_code || ''}${m.lexile}L`;
+    };
+
+    try {
+      // ISBN is an exact identifier — trust its result directly
+      const cleanIsbn = (isbn || '').replace(/[^0-9X]/gi, '');
+      if (cleanIsbn.length >= 10) {
+        for (const r of await searchLexile(cleanIsbn)) {
+          const measure = formatMeasure(r);
+          if (measure) return measure;
+        }
+      }
+
+      // Title search: only accept results whose title actually matches, so a
+      // similarly-named book never contributes a wrong reading level.
+      // (Author is NOT used as a hard filter — the Lexile DB has misspelled
+      // author names, e.g. "David Williams" for Walliams.)
+      if (title) {
+        const cleanTitle = title.replace(/\.[a-zA-Z0-9]+$/, '').replace(/\(.*?\)|\[.*?\]/g, '').trim();
+        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+        const target = normalize(cleanTitle);
+        if (target.length >= 3) {
+          // Accept only an exact title match (or exact up to a ":" subtitle) —
+          // looser prefix matching can grab study guides and compilations,
+          // e.g. "Charlotte's Web, Stuart Little" by a different author.
+          const isExactMatch = (r: any) => {
+            const dbTitle = String(r.title || '');
+            return normalize(dbTitle) === target || normalize(dbTitle.split(':')[0]) === target;
+          };
+          const termVariants = author ? [`${cleanTitle} ${author}`, cleanTitle] : [cleanTitle];
+          for (const term of termVariants) {
+            const results = await searchLexile(term);
+            for (const r of results.filter(isExactMatch)) {
+              const measure = formatMeasure(r);
+              if (measure) return measure;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[Lexile] Measure lookup bypassed or unavailable.');
+    }
+    return null;
+  };
+
+  app.get('/api/v1/lexile', async (req, res) => {
+    const { title, author, isbn } = req.query;
+    if (!title && !isbn) {
+      return res.status(400).json({ error: 'title or isbn is required' });
+    }
+    const lexileLevel = await lookupLexileMeasure(
+      typeof title === 'string' ? title : '',
+      typeof author === 'string' ? author : '',
+      typeof isbn === 'string' ? isbn : ''
+    );
+    res.json({ lexileLevel });
+  });
+
   app.post('/api/v1/enrich-book-ai', async (req, res) => {
     const { title: rawTitle, author, isbn, description: rawDescription } = req.body;
     const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
@@ -922,8 +1007,12 @@ async function startServer() {
       };
     };
 
-    // First fetch real record details from WorldCat / Z39.50 / Google Books
-    const retrievedData = await fetchWorldCataloguingData(title, author, isbn, description);
+    // First fetch real record details from WorldCat / Z39.50 / Google Books,
+    // plus the Lexile reading measure in parallel
+    const [retrievedData, lexileLevel] = await Promise.all([
+      fetchWorldCataloguingData(title, author, isbn, description),
+      lookupLexileMeasure(title, author, isbn)
+    ]);
 
     const apiKey = process.env.GEMINI_API_KEY;
     const isMockKey = !apiKey || 
@@ -939,7 +1028,7 @@ async function startServer() {
     if (isMockKey) {
       console.log(`[Scholastic API Core] Active API key is unconfigured or a mock/placeholder. Running advanced offline scholastic heuristic modeling engine for book: "${title}"`);
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
-      return res.json(heuristicResult);
+      return res.json({ ...heuristicResult, lexileLevel });
     }
 
     try {
@@ -1039,11 +1128,11 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
         parsed.description = "No synopsis/abstract available in public bibliographic databases.";
       }
 
-      res.json(parsed);
+      res.json({ ...parsed, lexileLevel });
     } catch (err: any) {
       console.log("[Scholastic API Core] Gemini API execution bypassed. Utilizing advanced offline scholastic heuristic modeling engine.");
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
-      res.json(heuristicResult);
+      res.json({ ...heuristicResult, lexileLevel });
     }
   });
 

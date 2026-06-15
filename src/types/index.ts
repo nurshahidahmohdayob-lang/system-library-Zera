@@ -36,6 +36,7 @@ export interface Book {
   language?: string;
   pageCount?: number;
   dimensions?: string;
+  lexileLevel?: string;
   totalCopies: number;
   availableCopies: number;
   subjects?: string[];
