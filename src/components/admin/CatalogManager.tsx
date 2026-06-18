@@ -23,7 +23,7 @@ import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
-import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, isRealSynopsis } from '@/src/services/catalogService';
+import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles } from 'lucide-react';
 
@@ -85,14 +85,16 @@ export const CatalogManager = () => {
   // measure before it reaches the form, so the librarian sees (and can tweak)
   // the real values.
   const withWebSynopsis = async (draft: Partial<Book>): Promise<Partial<Book>> => {
-    const [synopsis, lexile] = await Promise.all([
+    const [synopsis, lexile, cover] = await Promise.all([
       isRealSynopsis(draft.description) ? Promise.resolve('') : fetchSynopsisFromWeb(draft),
-      draft.lexileLevel ? Promise.resolve('') : fetchLexileFromWeb(draft)
+      draft.lexileLevel ? Promise.resolve('') : fetchLexileFromWeb(draft),
+      isRealCover(draft.coverUrl) ? Promise.resolve('') : fetchCoverFromWeb(draft)
     ]);
     return {
       ...draft,
       ...(synopsis ? { description: synopsis } : {}),
-      ...(lexile ? { lexileLevel: lexile } : {})
+      ...(lexile ? { lexileLevel: lexile } : {}),
+      ...(cover ? { coverUrl: cover } : {})
     };
   };
 
@@ -225,18 +227,20 @@ export const CatalogManager = () => {
     if (!selectedBookForView) return;
     setSaving(true);
     try {
-      const [synopsis, lexile] = await Promise.all([
+      const [synopsis, lexile, cover] = await Promise.all([
         fetchSynopsisFromWeb(selectedBookForView),
-        fetchLexileFromWeb(selectedBookForView)
+        fetchLexileFromWeb(selectedBookForView),
+        isRealCover(selectedBookForView.coverUrl) ? Promise.resolve('') : fetchCoverFromWeb(selectedBookForView)
       ]);
-      if (synopsis || lexile) {
+      if (synopsis || lexile || cover) {
         const updates: Partial<Book> & { updatedAt: string } = { updatedAt: new Date().toISOString() };
         if (synopsis) updates.description = synopsis;
         if (lexile) updates.lexileLevel = lexile;
+        if (cover) updates.coverUrl = cover;
         await updateDoc(doc(db, 'books', selectedBookForView.id), updates);
         setSelectedBookForView({ ...selectedBookForView, ...updates });
       } else {
-        alert("No synopsis or Lexile measure found on the web for this title/ISBN.");
+        alert("No new synopsis, Lexile measure, or cover found on the web for this title/ISBN.");
       }
     } catch (error) {
       alert("Failed to update book details: " + (error instanceof Error ? error.message : String(error)));
@@ -276,6 +280,40 @@ export const CatalogManager = () => {
       alert("Lexile sync stopped: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLexileSync(null);
+    }
+  };
+
+  // Walks the whole catalogue and fetches a real cover image for every book
+  // that is still showing the generic placeholder (or has none).
+  const [coverSync, setCoverSync] = useState<{ current: number; total: number } | null>(null);
+  const handleSyncBookCovers = async () => {
+    const missing = books.filter(b => !isRealCover(b.coverUrl));
+    if (missing.length === 0) {
+      alert("Every catalogued book already has a real cover image.");
+      return;
+    }
+    if (!window.confirm(`Find and attach cover images for ${missing.length} book${missing.length !== 1 ? 's' : ''} without one? This may take a few minutes.`)) {
+      return;
+    }
+    setCoverSync({ current: 0, total: missing.length });
+    let found = 0;
+    try {
+      for (let i = 0; i < missing.length; i++) {
+        setCoverSync({ current: i + 1, total: missing.length });
+        const cover = await fetchCoverFromWeb(missing[i]);
+        if (cover) {
+          await updateDoc(doc(db, 'books', missing[i].id), {
+            coverUrl: cover,
+            updatedAt: new Date().toISOString()
+          });
+          found++;
+        }
+      }
+      alert(`Cover sync complete: covers found and saved for ${found} of ${missing.length} books. Books without a result have no cover in the public databases.`);
+    } catch (error) {
+      alert("Cover sync stopped: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setCoverSync(null);
     }
   };
 
@@ -380,7 +418,17 @@ export const CatalogManager = () => {
           )}
           <button
             type="button"
-            disabled={lexileSync !== null || saving}
+            disabled={coverSync !== null || lexileSync !== null || saving}
+            onClick={handleSyncBookCovers}
+            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-zera-emerald/30 text-zera-emerald hover:bg-zera-emerald/5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider disabled:opacity-60"
+            title="Find and attach a real cover image for every catalogued book that doesn't have one yet."
+          >
+            {coverSync ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookIcon className="w-4 h-4" />}
+            {coverSync ? `Covers ${coverSync.current}/${coverSync.total}` : 'Sync Book Covers'}
+          </button>
+          <button
+            type="button"
+            disabled={lexileSync !== null || coverSync !== null || saving}
             onClick={handleSyncLexileLevels}
             className="flex items-center gap-2 px-5 py-2.5 bg-white border border-zera-emerald/30 text-zera-emerald hover:bg-zera-emerald/5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider disabled:opacity-60"
             title="Look up the Lexile reading level for every catalogued book that doesn't have one yet."

@@ -526,6 +526,194 @@ async function startServer() {
     return null;
   };
 
+  // Build an ordered list of candidate CSV URLs to try for a pasted link.
+  // Runs server-side so the browser's CORS policy can't block public Google
+  // Sheets / Dropbox / Drive / raw CSV URLs. For Google Sheets we try several
+  // export forms because a Workspace org can answer one endpoint with 403 while
+  // another succeeds.
+  const buildCsvCandidates = (raw: string): string[] => {
+    let url = raw.trim();
+
+    // Already a "Publish to web" link (/spreadsheets/d/e/<token>/pub...). These
+    // are truly public; just make sure CSV output is requested.
+    if (/\/spreadsheets\/d\/e\//.test(url)) {
+      let pub = url.replace('/pubhtml', '/pub');
+      if (!/output=csv/.test(pub)) {
+        pub += (pub.includes('?') ? '&' : '?') + 'output=csv';
+      }
+      return [pub];
+    }
+
+    // Normal Google Sheet: https://docs.google.com/spreadsheets/d/<ID>/edit#gid=<GID>
+    const gsheet = url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (gsheet) {
+      const id = gsheet[1];
+      const gidMatch = url.match(/[#&?]gid=(\d+)/);
+      const gid = gidMatch ? gidMatch[1] : '0';
+      return [
+        `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`,
+        `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`,
+      ];
+    }
+
+    // Dropbox share links -> direct download
+    if (/dropbox\.com\//.test(url)) {
+      url = url.replace('?dl=0', '?dl=1').replace('www.dropbox.com', 'dl.dropboxusercontent.com');
+    }
+    // Google Drive file links -> direct download
+    const gdrive = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9-_]+)/);
+    if (gdrive) {
+      return [`https://drive.google.com/uc?export=download&id=${gdrive[1]}`];
+    }
+    return [url];
+  };
+
+  app.get('/api/v1/fetch-sheet', async (req, res) => {
+    const { url: rawUrl } = req.query;
+    if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+      return res.status(400).json({ error: 'A spreadsheet/CSV url is required' });
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl.trim());
+    } catch {
+      return res.status(400).json({ error: 'That does not look like a valid link. Paste a full https:// URL.' });
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return res.status(400).json({ error: 'Only http/https links are supported.' });
+    }
+
+    const isGoogleSheet = /docs\.google\.com\/spreadsheets/.test(rawUrl);
+    const candidates = buildCsvCandidates(rawUrl);
+
+    const tryFetch = async (fetchUrl: string): Promise<{ ok: true; csv: string; source: string } | { ok: false; status: number; html: boolean }> => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      try {
+        const upstream = await fetch(fetchUrl, {
+          signal: controller.signal,
+          redirect: 'follow',
+          headers: { 'User-Agent': 'Mozilla/5.0 (ZeraLibrary)', 'Accept': 'text/csv, text/plain, */*' },
+        });
+        if (!upstream.ok) {
+          return { ok: false, status: upstream.status, html: false };
+        }
+        const contentType = upstream.headers.get('content-type') || '';
+        const body = await upstream.text();
+        const looksLikeHtml = /^\s*<(!doctype|html)/i.test(body) || contentType.includes('text/html');
+        if (looksLikeHtml) {
+          return { ok: false, status: upstream.status, html: true };
+        }
+        return { ok: true, csv: body, source: fetchUrl };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    let lastStatus = 0;
+    let sawHtml = false;
+    try {
+      for (const candidate of candidates) {
+        const result = await tryFetch(candidate);
+        if (result.ok === true) {
+          return res.json({ csv: result.csv, source: result.source });
+        }
+        lastStatus = result.status;
+        sawHtml = sawHtml || result.html;
+      }
+    } catch (err) {
+      const aborted = err instanceof Error && err.name === 'AbortError';
+      return res.status(aborted ? 504 : 502).json({
+        error: aborted ? 'The link took too long to respond.' : 'Could not fetch that link. Check the URL and sharing settings.',
+      });
+    }
+
+    // All candidates failed — explain the most likely fix.
+    if (isGoogleSheet && (lastStatus === 403 || lastStatus === 401 || sawHtml)) {
+      return res.status(502).json({
+        error: 'Google blocked access to this sheet (403). On a school/Workspace account, "Anyone with the link" is often limited to people inside your organisation, so an outside server can\'t read it. Fix: in the Sheet, go File ▸ Share ▸ Publish to web ▸ choose CSV ▸ Publish, then paste that published link here. (Or download the sheet as .csv and use the file upload above.)',
+      });
+    }
+    return res.status(502).json({
+      error: sawHtml
+        ? 'The link returned a web page, not a spreadsheet. Set sharing to "Anyone with the link can view", or paste a direct .csv link.'
+        : `The link returned ${lastStatus || 'an error'}. Make sure it is publicly viewable, or use File ▸ Share ▸ Publish to web ▸ CSV and paste that link.`,
+    });
+  });
+
+  // Finds a real book-cover image URL from the open web using the ISBN first,
+  // then the title (+author). Uses Open Library's search index, which only
+  // returns a `cover_i` (cover id) when a genuine cover actually exists — so we
+  // never attach a blank placeholder. No API key and no per-user quota.
+  const lookupCoverImage = async (title: string, author: string, isbn: string): Promise<string> => {
+    const olFetch = async (url: string): Promise<any | null> => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      try {
+        const r = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'ZeraLibrary/1.0 (library@zera.edu.my)' },
+        });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const coverFromId = (id: number | undefined): string =>
+      typeof id === 'number' && id > 0 ? `https://covers.openlibrary.org/b/id/${id}-L.jpg` : '';
+
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+    // 1. Exact ISBN match — most reliable.
+    const cleanIsbn = (isbn || '').replace(/[^0-9X]/gi, '');
+    if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
+      const data = await olFetch(`https://openlibrary.org/search.json?isbn=${cleanIsbn}&limit=1&fields=cover_i,title`);
+      const doc = data?.docs?.[0];
+      const url = coverFromId(doc?.cover_i);
+      if (url) return url;
+    }
+
+    // 2. Title (+author) search. Prefer a doc whose title matches exactly so we
+    //    don't grab an omnibus/study-guide cover for the wrong edition.
+    if (title && title.trim()) {
+      const params = new URLSearchParams({ title: title.trim(), limit: '8' });
+      if (author && author.trim()) params.set('author', author.trim().split(',')[0]);
+      params.set('fields', 'title,author_name,cover_i');
+      const data = await olFetch(`https://openlibrary.org/search.json?${params.toString()}`);
+      const docs: any[] = Array.isArray(data?.docs) ? data.docs : [];
+      const target = normalize(title);
+      const withCover = docs.filter(d => typeof d.cover_i === 'number' && d.cover_i > 0);
+
+      const exact = withCover.find(d =>
+        normalize(d.title || '') === target ||
+        normalize((d.title || '').split(':')[0]) === target
+      );
+      if (exact) return coverFromId(exact.cover_i);
+      // Author was provided (so the search is already constrained) — accept the
+      // top covered result.
+      if (author && author.trim() && withCover[0]) return coverFromId(withCover[0].cover_i);
+    }
+
+    return '';
+  };
+
+  app.get('/api/v1/cover', async (req, res) => {
+    const { title, author, isbn } = req.query;
+    if (!title && !isbn) {
+      return res.status(400).json({ error: 'title or isbn is required' });
+    }
+    const coverUrl = await lookupCoverImage(
+      typeof title === 'string' ? title : '',
+      typeof author === 'string' ? author : '',
+      typeof isbn === 'string' ? isbn : ''
+    );
+    res.json({ coverUrl });
+  });
+
   app.get('/api/v1/lexile', async (req, res) => {
     const { title, author, isbn } = req.query;
     if (!title && !isbn) {

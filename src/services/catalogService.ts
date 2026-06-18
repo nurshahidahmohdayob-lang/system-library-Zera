@@ -47,6 +47,105 @@ export async function fetchSynopsisFromWeb(book: Partial<Book>): Promise<string>
 }
 
 /**
+ * True when the cover URL points at a real book jacket rather than the generic
+ * Unsplash "no cover" placeholder (or being empty).
+ */
+export function isRealCover(url?: string | null): url is string {
+  if (!url) return false;
+  const u = url.trim();
+  return u.length > 0 && !/unsplash\.com/i.test(u);
+}
+
+/**
+ * Finds a real cover image for a book from the open web (Open Library cover
+ * service by ISBN, then Google Books / Open Library data lookups by ISBN, then
+ * by title). Returns '' when no genuine cover can be located.
+ */
+export async function fetchCoverFromWeb(book: Partial<Book>): Promise<string> {
+  const cleanIsbn = (book.isbn || '').replace(/[^0-9X]/gi, '');
+
+  // Pull the largest available Google Books cover out of a volumeInfo block.
+  // Google Books only includes imageLinks when a genuine jacket exists, so this
+  // is the most trustworthy "real cover" signal.
+  const pickGoogleCover = (info: any): string => {
+    const links = info?.imageLinks;
+    if (!links) return '';
+    const best = links.extraLarge || links.large || links.medium || links.small || links.thumbnail || links.smallThumbnail;
+    return best ? best.replace('http:', 'https:').replace('&edge=curl', '') : '';
+  };
+
+  const googleQuery = async (q: string): Promise<string> => {
+    try {
+      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5`);
+      if (!res.ok) return '';
+      const data = await res.json();
+      if (!data.items) return '';
+      for (const item of data.items) {
+        const cover = pickGoogleCover(item.volumeInfo);
+        if (cover) return cover;
+      }
+    } catch {
+      // network / quota — caller falls through
+    }
+    return '';
+  };
+
+  // 1. Google Books by ISBN (highest-resolution jacket when available).
+  if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
+    const byIsbn = await googleQuery(`isbn:${cleanIsbn}`);
+    if (byIsbn) return byIsbn;
+  }
+
+  // 2. Google Books by title (+ author when known).
+  if (book.title?.trim()) {
+    const parts = [`intitle:${book.title.trim()}`];
+    if (book.author?.trim()) parts.push(`inauthor:${book.author.trim().split(',')[0]}`);
+    const byTitle = await googleQuery(encodeURIComponent(parts.join('+')));
+    if (byTitle) return byTitle;
+  }
+
+  // 3. Server-side Open Library cover lookup (no quota, matches by ISBN then
+  //    title+author, and only returns a genuinely-existing cover). This is the
+  //    reliable fallback when Google Books is rate-limited in the browser.
+  if (cleanIsbn || book.title?.trim()) {
+    try {
+      const params = new URLSearchParams();
+      if (book.title?.trim()) params.set('title', book.title.trim());
+      if (book.author?.trim()) params.set('author', book.author.trim());
+      if (cleanIsbn) params.set('isbn', cleanIsbn);
+      const res = await fetch(`/api/v1/cover?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (isRealCover(data?.coverUrl)) return data.coverUrl.trim();
+      }
+    } catch {
+      // ignore and try the data lookups below
+    }
+  }
+
+  // 4. Final fallback: the standard metadata lookups.
+  if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
+    try {
+      const match = await lookupBookByIsbn(cleanIsbn);
+      if (isRealCover(match?.coverUrl)) return match!.coverUrl!.trim();
+    } catch {
+      // ignore
+    }
+  }
+  if (book.title?.trim()) {
+    try {
+      const matches = await lookupBookByTitle(book.title.trim());
+      const withCover = matches?.find(m => isRealCover(m.coverUrl));
+      if (withCover) return withCover.coverUrl!.trim();
+    } catch {
+      // nothing found
+    }
+  }
+
+  return '';
+}
+
+/**
  * Enriches any partial book record with complete details (cover, summary, publisher, subjects)
  * by looking up additional databases if fields are missing.
  */

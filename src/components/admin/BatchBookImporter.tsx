@@ -17,7 +17,8 @@ import {
   Search,
   Book as BookIcon,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Link2
 } from 'lucide-react';
 import { db, auth } from '@/src/lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
@@ -100,6 +101,9 @@ interface ActiveJob {
 export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose }) => {
   const [step, setStep] = useState<number>(1); // 1: Choose/Paste, 2: Column Mapping, 3: Sync & Store, 4: Result
   const [inputText, setInputText] = useState<string>('');
+  const [linkUrl, setLinkUrl] = useState<string>('');
+  const [linkLoading, setLinkLoading] = useState<boolean>(false);
+  const [linkError, setLinkError] = useState<string>('');
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [parsedRows, setParsedRows] = useState<UploadedRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
@@ -259,6 +263,37 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
       return;
     }
     processFileContent(inputText);
+  };
+
+  const handleLinkImport = async () => {
+    const url = linkUrl.trim();
+    setLinkError('');
+    if (!url) {
+      setLinkError('Paste a spreadsheet or CSV link first.');
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      setLinkError('Enter a full link starting with https://');
+      return;
+    }
+    setLinkLoading(true);
+    try {
+      const res = await fetch(`/api/v1/fetch-sheet?url=${encodeURIComponent(url)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.csv) {
+        setLinkError(data?.error || 'Could not read books from that link.');
+        return;
+      }
+      if (!data.csv.trim()) {
+        setLinkError('The link opened, but the sheet appears to be empty.');
+        return;
+      }
+      processFileContent(data.csv, 'import.csv');
+    } catch {
+      setLinkError('Network error fetching the link. Is the dev server running?');
+    } finally {
+      setLinkLoading(false);
+    }
   };
 
   const finalizeMapping = () => {
@@ -528,6 +563,45 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
                   accept=".csv,.txt"
                   onChange={handleFileSelect}
                 />
+              </div>
+
+              {/* Import from Link (Google Sheet / CSV URL) */}
+              <div className="space-y-3">
+                 <label className="text-[10px] font-black text-natural-muted uppercase tracking-widest block flex items-center gap-1.5">
+                   <Link2 className="w-3.5 h-3.5 text-zera-emerald" /> Import from a Link (Google Sheet or CSV URL)
+                 </label>
+                 <div className="flex flex-col sm:flex-row gap-3">
+                   <input
+                     type="url"
+                     inputMode="url"
+                     placeholder="https://docs.google.com/spreadsheets/d/…  or  https://…/books.csv"
+                     value={linkUrl}
+                     onChange={e => { setLinkUrl(e.target.value); if (linkError) setLinkError(''); }}
+                     onKeyDown={e => { if (e.key === 'Enter' && !linkLoading) handleLinkImport(); }}
+                     disabled={linkLoading}
+                     className="flex-1 bg-natural-bg/40 border border-natural-border focus:bg-white rounded-2xl px-4 py-3 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-zera-emerald antialiased disabled:opacity-50"
+                   />
+                   <button
+                     onClick={handleLinkImport}
+                     disabled={linkLoading}
+                     className="px-6 py-3 bg-zera-emerald text-white hover:bg-zera-emerald-dark rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow transition-all disabled:opacity-60 shrink-0"
+                   >
+                     {linkLoading
+                       ? (<><Loader2 className="w-4 h-4 animate-spin" /> Fetching…</>)
+                       : (<>Import from Link <ChevronRight className="w-4 h-4" /></>)}
+                   </button>
+                 </div>
+                 {linkError
+                   ? (
+                     <p className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 flex items-start gap-1.5">
+                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {linkError}
+                     </p>
+                   )
+                   : (
+                     <p className="text-[10px] text-natural-muted leading-relaxed">
+                       Paste a direct <span className="font-bold text-zera-emerald">.csv</span> URL, or a Google Sheet link. On a <span className="font-bold text-zera-emerald">school / Workspace account</span>, "Anyone with the link" can be blocked for outside servers — if you get a 403, open the Sheet and use <span className="font-bold text-zera-emerald">File ▸ Share ▸ Publish to web ▸ CSV</span>, then paste that published link here. We'll pull every row, then let you map the columns just like a file upload.
+                     </p>
+                   )}
               </div>
 
               {/* Paste Segment Fallback */}

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
-import { Search, Book as BookIcon, BookOpen, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check } from 'lucide-react';
+import { Search, Book as BookIcon, BookOpen, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '@/src/hooks/useAuth';
@@ -62,11 +62,31 @@ export const BookGrid = () => {
 
 
 
-  const filteredBooks = books.filter(b => 
+  const filteredBooks = books.filter(b =>
     b.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.author?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.isbn?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Public catalogue pagination — show 16 books per page, the rest on later pages.
+  const PER_PAGE = 16;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(filteredBooks.length / PER_PAGE));
+
+  // Whenever the search or the result count shrinks, keep the page in range.
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, viewMode]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const paginatedBooks = filteredBooks.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  const goToPage = (p: number) => {
+    setPage(Math.min(Math.max(1, p), totalPages));
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
 
 
@@ -140,8 +160,8 @@ export const BookGrid = () => {
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4 animate-in fade-in duration-350">
-          {filteredBooks.map((book, i) => {
-            const isAbstractAvailable = book.description && 
+          {paginatedBooks.map((book, i) => {
+            const isAbstractAvailable = book.description &&
               book.description !== 'Institutional asset for Zera Education.' && 
               book.description !== 'No explicit abstract provided for this asset.' && 
               !book.description.startsWith('Institutional archive record for') &&
@@ -196,8 +216,8 @@ export const BookGrid = () => {
         </div>
       ) : (
         <div className="space-y-4 max-w-4xl mx-auto animate-in fade-in duration-350">
-          {filteredBooks.map((book, i) => {
-            const hasRealDesc = book.description && 
+          {paginatedBooks.map((book, i) => {
+            const hasRealDesc = book.description &&
               book.description !== 'Institutional asset for Zera Education.' && 
               book.description !== 'No explicit abstract provided for this asset.' && 
               !book.description.startsWith('Institutional archive record for');
@@ -251,6 +271,58 @@ export const BookGrid = () => {
               </motion.div>
             );
           })}
+        </div>
+      )}
+
+      {/* Pagination — 16 books per page */}
+      {!loading && filteredBooks.length > PER_PAGE && (
+        <div className="flex flex-col items-center gap-3 pt-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => goToPage(page - 1)}
+              disabled={page === 1}
+              className="flex items-center gap-1 px-4 py-2.5 bg-white border border-natural-border rounded-xl text-xs font-black uppercase tracking-wider text-natural-text shadow-sm hover:border-zera-emerald/40 hover:text-zera-emerald transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" /> Prev
+            </button>
+
+            {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+              .map((p, idx, arr) => {
+                const prev = arr[idx - 1];
+                const gap = prev && p - prev > 1;
+                return (
+                  <React.Fragment key={p}>
+                    {gap && <span className="px-1.5 text-natural-muted font-black select-none">…</span>}
+                    <button
+                      type="button"
+                      onClick={() => goToPage(p)}
+                      className={cn(
+                        "min-w-[2.5rem] px-3 py-2.5 rounded-xl text-xs font-black tabular-nums shadow-sm border transition-all",
+                        p === page
+                          ? "bg-zera-emerald text-white border-zera-emerald-dark"
+                          : "bg-white text-natural-text border-natural-border hover:border-zera-emerald/40 hover:text-zera-emerald"
+                      )}
+                    >
+                      {p}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+
+            <button
+              type="button"
+              onClick={() => goToPage(page + 1)}
+              disabled={page === totalPages}
+              className="flex items-center gap-1 px-4 py-2.5 bg-white border border-natural-border rounded-xl text-xs font-black uppercase tracking-wider text-natural-text shadow-sm hover:border-zera-emerald/40 hover:text-zera-emerald transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <span className="text-[11px] font-bold text-natural-muted">
+            Page {page} of {totalPages} · showing {paginatedBooks.length} of {filteredBooks.length} holdings
+          </span>
         </div>
       )}
 
