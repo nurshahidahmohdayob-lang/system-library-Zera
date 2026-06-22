@@ -42,6 +42,7 @@ export const CatalogManager = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [multiCopyOnly, setMultiCopyOnly] = useState(false);
   
   const [newBook, setNewBook] = useState<Partial<Book>>({
     title: '',
@@ -387,8 +388,22 @@ export const CatalogManager = () => {
     }
   };
 
-  const totalPages = Math.ceil(books.length / itemsPerPage);
-  const paginatedBooks = books.slice((page - 1) * itemsPerPage, page * itemsPerPage);
+  // "Multiple copies" = the SAME title appears more than once in the catalogue
+  // (duplicate records), OR a single record holds more than one physical copy.
+  const titleKey = (b: Book) => (b.title || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const titleFreq = books.reduce((map, b) => {
+    const k = titleKey(b);
+    if (k) map.set(k, (map.get(k) || 0) + 1);
+    return map;
+  }, new Map<string, number>());
+  const isMultiCopy = (b: Book) =>
+    (b.totalCopies || 0) > 1 || (titleFreq.get(titleKey(b)) || 0) > 1;
+
+  const multiCopyBooks = books.filter(isMultiCopy);
+  const multiCopyCount = multiCopyBooks.length;
+  const displayBooks = multiCopyOnly ? multiCopyBooks : books;
+  const totalPages = Math.ceil(displayBooks.length / itemsPerPage);
+  const paginatedBooks = displayBooks.slice((page - 1) * itemsPerPage, page * itemsPerPage);
 
   return (
     <div className="space-y-6 pb-20">
@@ -416,6 +431,20 @@ export const CatalogManager = () => {
               Delete Selected ({selectedIds.size})
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => { setMultiCopyOnly(v => !v); setPage(1); }}
+            className={cn(
+              "flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider",
+              multiCopyOnly
+                ? "bg-zera-emerald text-white hover:bg-zera-emerald-dark"
+                : "bg-white border border-zera-emerald/30 text-zera-emerald hover:bg-zera-emerald/5"
+            )}
+            title="Show titles that appear more than once in the catalogue (duplicate records), or a record with more than one copy"
+          >
+            <Copy className="w-4 h-4" />
+            {multiCopyOnly ? `Multiple Copies (${multiCopyCount})` : 'Multiple Copies'}
+          </button>
           <button
             type="button"
             disabled={coverSync !== null || lexileSync !== null || saving}
