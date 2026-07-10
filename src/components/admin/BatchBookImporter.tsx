@@ -1,9 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { 
-  UploadCloud, 
-  X, 
-  Play, 
-  CheckCircle2, 
+  UploadCloud,
+  X,
+  CheckCircle2,
   AlertTriangle, 
   Loader2, 
   FileText, 
@@ -20,11 +19,152 @@ import {
   ArrowRight,
   Link2
 } from 'lucide-react';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { db, auth } from '@/src/lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { lookupBookByIsbn, lookupBookByTitle, isRealSynopsis } from '@/src/services/catalogService';
+
+// pdf.js is ~1.3MB, so load it only when a PDF is actually imported instead of
+// bundling it into the main app chunk. The web worker is wired up on first use.
+let pdfjsPromise: Promise<typeof import('pdfjs-dist')> | null = null;
+const loadPdfjs = () => {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import('pdfjs-dist').then(lib => {
+      lib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      return lib;
+    });
+  }
+  return pdfjsPromise;
+};
+
+// SheetJS (~500KB) is likewise only loaded when an Excel file is imported.
+let xlsxPromise: Promise<typeof import('xlsx')> | null = null;
+const loadXlsx = () => {
+  if (!xlsxPromise) xlsxPromise = import('xlsx');
+  return xlsxPromise;
+};
+
+// ---- PDF text reconstruction helpers ----
+// A single glyph run from pdf.js text content, with its page position.
+type PdfFrag = { str: string; x: number; y: number; w: number };
+
+// Split one visual line of fragments into cells wherever there's a wide
+// horizontal gap. Returns the cell text and the x-start of each cell.
+const lineToCells = (line: PdfFrag[]): { cells: string[]; xs: number[] } => {
+  const ordered = [...line].sort((a, b) => a.x - b.x);
+  const cells: string[] = [];
+  const xs: number[] = [];
+  let cell = '';
+  let startX: number | null = null;
+  let prevEnd: number | null = null;
+  for (const it of ordered) {
+    if (prevEnd !== null && it.x - prevEnd > 12) {
+      cells.push(cell.replace(/\s+/g, ' ').trim());
+      xs.push(startX as number);
+      cell = '';
+      startX = null;
+    }
+    if (startX === null) startX = it.x;
+    cell += (cell ? ' ' : '') + it.str;
+    prevEnd = it.x + it.w;
+  }
+  if (cell.trim()) {
+    cells.push(cell.replace(/\s+/g, ' ').trim());
+    xs.push(startX as number);
+  }
+  return { cells, xs };
+};
+
+const isSerialCell = (s: string) => /^\d{1,5}$/.test(s.trim());
+const isReportHeader = (cells: string[]) =>
+  cells.includes('Title') && cells.some(c => /identifier|isbn/i.test(c));
+const isReportNoise = (cells: string[]) =>
+  cells.length <= 2 &&
+  cells.every(c => /^(report:|sl|no|title|type|publisher|identifiers?|call|category|copies)/i.test(c.trim()));
+const isReportFooter = (text: string) =>
+  /showing\s+\d+\s+records\s+out\s+of|page\s+\d+\s+of\s+\d+/i.test(text);
+
+// Reduce a mixed "ISBN: … ISBN_13: …" identifier blob to one clean number,
+// preferring the 13-digit ISBN.
+const cleanReportIsbn = (text: string): string => {
+  const m13 = text.match(/ISBN[_ ]?13[:\s]*([0-9]{13})/i) || text.match(/\b(97[89][0-9]{10})\b/);
+  if (m13) return m13[1];
+  const m10 = text.match(/ISBN[:\s]*([0-9]{9}[0-9Xx])/i) || text.match(/\b([0-9]{9}[0-9Xx])\b/);
+  if (m10) return m10[1].toUpperCase();
+  return '';
+};
+
+// Reconstruct a wrapped "Report: Catalog Items"-style export, where each book
+// record spans several visual lines (wrapped title/publisher + a separate
+// ISBN_13 line). Records are anchored by a leading serial number (SL No), and
+// every fragment is bucketed into a column by the x-positions taken from the
+// header row. Returns [headers, ...records], or null when the PDF isn't this
+// kind of enumerated report (so callers fall back to generic extraction).
+const reconstructReportMatrix = (lines: PdfFrag[][]): string[][] | null => {
+  let colX: number[] | null = null;
+  let headerCells: string[] | null = null;
+  for (const line of lines) {
+    const { cells, xs } = lineToCells(line);
+    if (isReportHeader(cells)) {
+      colX = xs.slice();
+      headerCells = cells.slice();
+      break;
+    }
+  }
+  if (!colX || !headerCells || colX.length < 3) return null;
+
+  const cols = colX;
+  const isbnCol = headerCells.findIndex(c => /identifier|isbn/i.test(c));
+  const colOf = (x: number) => {
+    let idx = 0;
+    for (let i = 0; i < cols.length; i++) {
+      if (x >= cols[i] - 6) idx = i;
+      else break;
+    }
+    return idx;
+  };
+
+  const records: string[][] = [];
+  let cur: string[] | null = null;
+  for (const line of lines) {
+    const { cells } = lineToCells(line);
+    if (
+      isReportHeader(cells) ||
+      isReportNoise(cells) ||
+      isReportFooter(cells.join(' ')) ||
+      /^report:/i.test(cells[0] || '')
+    ) {
+      continue;
+    }
+
+    const row = Array.from({ length: cols.length }, () => '');
+    for (const it of [...line].sort((a, b) => a.x - b.x)) {
+      const c = colOf(it.x);
+      row[c] = (row[c] ? row[c] + ' ' : '') + it.str;
+    }
+
+    if (isSerialCell(row[0] || '')) {
+      // New record.
+      if (cur) records.push(cur);
+      cur = row.map(c => c.replace(/\s+/g, ' ').trim());
+    } else if (cur) {
+      // Continuation of the current record — append to matching columns.
+      for (let i = 0; i < row.length; i++) {
+        const t = row[i].replace(/\s+/g, ' ').trim();
+        if (t) cur[i] = (cur[i] ? cur[i] + ' ' : '') + t;
+      }
+    }
+  }
+  if (cur) records.push(cur);
+  if (records.length === 0) return null;
+
+  if (isbnCol >= 0) {
+    for (const r of records) r[isbnCol] = cleanReportIsbn(r[isbnCol] || '');
+  }
+  return [headerCells.map(h => h.trim()), ...records];
+};
 
 enum OperationType {
   CREATE = 'create',
@@ -82,6 +222,64 @@ interface ImportErrorItem {
   reason: string;
 }
 
+interface ColumnIndices {
+  titleIdx: number;
+  authorIdx: number;
+  isbnIdx: number;
+  categoryIdx: number;
+  copiesIdx: number;
+  descriptionIdx: number;
+}
+
+// Guess which column holds which field from the header names. Each header maps
+// to at most one field; later matches win (same as the original inline logic).
+const deriveColumnIndices = (fileHeaders: string[]): ColumnIndices => {
+  const idx: ColumnIndices = {
+    titleIdx: -1, authorIdx: -1, isbnIdx: -1, categoryIdx: -1, copiesIdx: -1, descriptionIdx: -1,
+  };
+  fileHeaders.forEach((h, i) => {
+    const lower = h.toLowerCase();
+    if (lower.includes('title') || lower.includes('bookname') || lower.includes('name')) idx.titleIdx = i;
+    else if (lower.includes('author') || lower.includes('writer')) idx.authorIdx = i;
+    else if (lower.includes('isbn') || lower.includes('identifier')) idx.isbnIdx = i;
+    else if (lower.includes('cat') || lower.includes('subject')) idx.categoryIdx = i;
+    else if (lower.includes('cop') || lower.includes('quantity') || lower === 'qty') idx.copiesIdx = i;
+    else if (lower.includes('summar') || lower.includes('synops') || lower.includes('descrip') || lower.includes('abstract') || lower.includes('notes')) idx.descriptionIdx = i;
+  });
+  return idx;
+};
+
+// Build the import rows from a body matrix given the resolved column indices.
+// Rows with neither a title nor an ISBN are collected as skippable errors.
+const rowsFromMatrix = (
+  body: string[][],
+  idx: ColumnIndices,
+): { rows: UploadedRow[]; errors: ImportErrorItem[] } => {
+  const rows: UploadedRow[] = [];
+  const errors: ImportErrorItem[] = [];
+  body.forEach((columns, index) => {
+    const rowNum = index + 2; // header is row 1
+    const title = idx.titleIdx !== -1 ? (columns[idx.titleIdx] || '').trim() : '';
+    const author = idx.authorIdx !== -1 ? (columns[idx.authorIdx] || '').trim() : '';
+    const isbn = idx.isbnIdx !== -1 ? (columns[idx.isbnIdx] || '').replace(/[^0-9X]/gi, '').trim() : '';
+    const category = idx.categoryIdx !== -1 ? (columns[idx.categoryIdx] || '').trim() : 'Fiction';
+    const rawCopies = idx.copiesIdx !== -1 ? parseInt(columns[idx.copiesIdx] || '1', 10) : 1;
+    const copies = isNaN(rawCopies) || rawCopies < 1 ? 1 : rawCopies;
+    const description = idx.descriptionIdx !== -1 ? (columns[idx.descriptionIdx] || '').trim() : '';
+
+    if (!title && !isbn) {
+      errors.push({
+        rowNum,
+        rawText: columns.join(','),
+        reason: 'Both Title and ISBN are empty. At least one identifier is required.',
+      });
+    } else {
+      rows.push({ title, author, isbn, category, copies, description });
+    }
+  });
+  return { rows, errors };
+};
+
 interface ActiveJob {
   index: number;
   row: UploadedRow;
@@ -105,6 +303,8 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
   const [linkLoading, setLinkLoading] = useState<boolean>(false);
   const [linkError, setLinkError] = useState<string>('');
   const [dragActive, setDragActive] = useState<boolean>(false);
+  const [fileLoading, setFileLoading] = useState<boolean>(false);
+  const [fileError, setFileError] = useState<string>('');
   const [parsedRows, setParsedRows] = useState<UploadedRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [rawMatrix, setRawMatrix] = useState<string[][]>([]);
@@ -171,35 +371,44 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
     }
   };
 
+  // Load a header+rows matrix, auto-guess the columns, and jump straight to the
+  // review-and-confirm list. Column mapping is only shown as a fallback when we
+  // can't confidently find a Title or ISBN column. Shared by CSV/link/PDF.
+  const applyMatrix = (matrix: string[][]) => {
+    if (matrix.length === 0) {
+      alert('No readable rows were found.');
+      return;
+    }
+    const fileHeaders = matrix[0].map(h => h.trim());
+    const body = matrix.slice(1);
+    const idx = deriveColumnIndices(fileHeaders);
+
+    // Keep the detected columns in state so the manual-mapping fallback
+    // (Step 2) opens pre-filled if the user chooses to adjust.
+    setHeaders(fileHeaders);
+    setRawMatrix(body);
+    setTitleIdx(idx.titleIdx); setAuthorIdx(idx.authorIdx); setIsbnIdx(idx.isbnIdx);
+    setCategoryIdx(idx.categoryIdx); setCopiesIdx(idx.copiesIdx); setDescriptionIdx(idx.descriptionIdx);
+
+    if (idx.titleIdx !== -1 || idx.isbnIdx !== -1) {
+      // Confident enough — skip mapping, show the books for confirmation.
+      const { rows, errors } = rowsFromMatrix(body, idx);
+      setParsedRows(rows);
+      setErrorLogs(errors);
+      setStep(3);
+    } else {
+      // Couldn't identify an anchor column — let the user map it manually.
+      setStep(2);
+    }
+  };
+
   const processFileContent = (content: string, fileName?: string) => {
     const isCsv = fileName?.endsWith('.csv') || content.includes(',');
-    
+
     if (isCsv) {
       const matrix = parseCSV(content);
       if (matrix.length > 0) {
-        const fileHeaders = matrix[0].map(h => h.trim());
-        setHeaders(fileHeaders);
-        setRawMatrix(matrix.slice(1));
-        
-        // Automated match of headers
-        fileHeaders.forEach((h, idx) => {
-          const lower = h.toLowerCase();
-          if (lower.includes('title') || lower === 'title' || lower.includes('bookname') || lower.includes('name')) {
-            setTitleIdx(idx);
-          } else if (lower.includes('author') || lower === 'author' || lower.includes('writer')) {
-            setAuthorIdx(idx);
-          } else if (lower.includes('isbn') || lower === 'isbn' || lower.includes('identifier')) {
-            setIsbnIdx(idx);
-          } else if (lower.includes('cat') || lower === 'category' || lower.includes('subject') || lower === 'subject') {
-            setCategoryIdx(idx);
-          } else if (lower.includes('cop') || lower === 'copies' || lower.includes('quantity') || lower === 'qty') {
-            setCopiesIdx(idx);
-          } else if (lower.includes('summar') || lower.includes('synops') || lower.includes('descrip') || lower.includes('abstract') || lower.includes('notes')) {
-            setDescriptionIdx(idx);
-          }
-        });
-
-        setStep(2);
+        applyMatrix(matrix);
       } else {
         alert('File content is empty or unreadable.');
       }
@@ -227,14 +436,159 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
+  // Turn a text-based PDF into a rows × columns matrix. Fragments are grouped
+  // into visual lines by y-position; enumerated "report" exports (one record
+  // wrapped across several lines) are reconstructed record-by-record, and
+  // everything else falls back to a simple one-line-per-row table split on
+  // wide horizontal gaps.
+  const extractPdfMatrix = async (data: ArrayBuffer): Promise<string[][]> => {
+    const pdfjsLib = await loadPdfjs();
+    const doc = await pdfjsLib.getDocument({ data }).promise;
 
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      const reader = new FileReader();
+    try {
+      const lines: PdfFrag[][] = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        const content = await page.getTextContent();
+
+        const items: PdfFrag[] = (content.items as any[])
+          .filter(it => typeof it.str === 'string' && it.str.trim() !== '')
+          .map(it => ({
+            str: it.str as string,
+            x: it.transform[4] as number,
+            y: it.transform[5] as number,
+            w: it.width as number,
+          }));
+        if (items.length === 0) continue;
+
+        // Group fragments into visual lines (top→bottom), tolerating y jitter.
+        const byLine = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+        let line: PdfFrag[] = [];
+        let lineY: number | null = null;
+        for (const it of byLine) {
+          if (lineY === null || Math.abs(it.y - lineY) <= 3) {
+            line.push(it);
+            if (lineY === null) lineY = it.y;
+          } else {
+            lines.push(line);
+            line = [it];
+            lineY = it.y;
+          }
+        }
+        if (line.length) lines.push(line);
+      }
+
+      // Prefer structured reconstruction for wrapped "report" exports.
+      const report = reconstructReportMatrix(lines);
+      if (report) return report;
+
+      // Otherwise, one visual line per row, columns split on wide gaps.
+      return lines
+        .map(line => lineToCells(line).cells.filter(Boolean))
+        .filter(cells => cells.length > 0);
+    } finally {
+      doc.destroy();
+    }
+  };
+
+  const processPdf = async (data: ArrayBuffer) => {
+    setFileError('');
+    setFileLoading(true);
+    try {
+      const matrix = await extractPdfMatrix(data);
+      if (matrix.length === 0) {
+        setFileError('No selectable text found in this PDF. If it is a scanned image, save the list as a CSV or paste the titles/ISBNs below instead.');
+        return;
+      }
+
+      const maxCols = Math.max(...matrix.map(r => r.length));
+      if (maxCols >= 2) {
+        // Looks like a table: keep multi-column rows and pad them to a
+        // consistent width so column mapping lines up. Stray single-cell
+        // lines (page numbers, headings) are dropped.
+        const table = matrix
+          .filter(r => r.length >= 2)
+          .map(r => {
+            const padded = [...r];
+            while (padded.length < maxCols) padded.push('');
+            return padded.slice(0, maxCols);
+          });
+        if (table.length > 0) {
+          applyMatrix(table);
+          return;
+        }
+      }
+
+      // Otherwise treat it as a plain list — one book per line.
+      processFileContent(matrix.map(r => r.join(' ')).join('\n'));
+    } catch (err) {
+      console.error('PDF import failed:', err);
+      setFileError('Could not read this PDF file. It may be encrypted or corrupted — try exporting it as CSV instead.');
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
+  // Read an Excel workbook (.xlsx/.xls) and hand its first sheet to the same
+  // column-mapping/review flow as a CSV.
+  const processExcel = async (data: ArrayBuffer) => {
+    setFileError('');
+    setFileLoading(true);
+    try {
+      const XLSX = await loadXlsx();
+      const wb = XLSX.read(data, { type: 'array' });
+      const firstSheetName = wb.SheetNames[0];
+      const sheet = firstSheetName ? wb.Sheets[firstSheetName] : undefined;
+      if (!sheet) {
+        setFileError('That workbook has no sheets to read.');
+        return;
+      }
+      // header:1 → array-of-arrays; raw:false renders cells as shown (keeps
+      // text ISBNs intact); defval keeps row lengths aligned.
+      const rows = XLSX.utils.sheet_to_json<any[]>(sheet, {
+        header: 1, blankrows: false, defval: '', raw: false,
+      });
+      const matrix = rows
+        .map(r => (Array.isArray(r) ? r.map(c => (c == null ? '' : String(c)).trim()) : []))
+        .filter(r => r.some(c => c !== ''));
+      if (matrix.length === 0) {
+        setFileError('The first sheet in that Excel file appears to be empty.');
+        return;
+      }
+      applyMatrix(matrix);
+    } catch (err) {
+      console.error('Excel import failed:', err);
+      setFileError('Could not read this Excel file. Make sure it is a valid .xlsx/.xls workbook, or export it as CSV.');
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
+  // Route a picked/dropped file by type: PDFs are parsed for text, Excel
+  // workbooks through SheetJS, everything else as plain text / CSV.
+  const handleFile = (file: File) => {
+    setFileError('');
+    const name = file.name.toLowerCase();
+    const isPdf = name.endsWith('.pdf') || file.type === 'application/pdf';
+    const isExcel = /\.(xlsx|xlsm|xlsb|xls)$/.test(name)
+      || file.type.includes('spreadsheetml')
+      || file.type === 'application/vnd.ms-excel';
+    const reader = new FileReader();
+    if (isPdf) {
+      reader.onload = (event) => {
+        if (event.target?.result instanceof ArrayBuffer) {
+          processPdf(event.target.result);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (isExcel) {
+      reader.onload = (event) => {
+        if (event.target?.result instanceof ArrayBuffer) {
+          processExcel(event.target.result);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
       reader.onload = (event) => {
         if (event.target?.result && typeof event.target.result === 'string') {
           processFileContent(event.target.result, file.name);
@@ -244,17 +598,22 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
     }
   };
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result && typeof event.target.result === 'string') {
-          processFileContent(event.target.result, file.name);
-        }
-      };
-      reader.readAsText(file);
+      handleFile(e.target.files[0]);
     }
+    // Allow re-selecting the same file after a failed/aborted import.
+    e.target.value = '';
   };
 
   const handlePasteSubmit = () => {
@@ -298,34 +657,12 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
 
   const finalizeMapping = () => {
     if (titleIdx === -1 && isbnIdx === -1) {
-      alert('Mapping Error: You must map at least the Book Title or the ISBN column to process metadata lookup.');
+      alert('Please choose at least the Book Title or the ISBN column.');
       return;
     }
-
-    const rows: UploadedRow[] = [];
-    const errors: ImportErrorItem[] = [];
-
-    rawMatrix.forEach((columns, index) => {
-      const rowNum = index + 2; // header index + 1-based
-      const title = titleIdx !== -1 ? (columns[titleIdx] || '').trim() : '';
-      const author = authorIdx !== -1 ? (columns[authorIdx] || '').trim() : '';
-      const isbn = isbnIdx !== -1 ? (columns[isbnIdx] || '').replace(/[^0-9X]/gi, '').trim() : '';
-      const category = categoryIdx !== -1 ? (columns[categoryIdx] || '').trim() : 'Fiction';
-      const rawCopies = copiesIdx !== -1 ? parseInt(columns[copiesIdx] || '1', 10) : 1;
-      const copies = isNaN(rawCopies) || rawCopies < 1 ? 1 : rawCopies;
-      const description = descriptionIdx !== -1 ? (columns[descriptionIdx] || '').trim() : '';
-
-      if (!title && !isbn) {
-        errors.push({
-          rowNum,
-          rawText: columns.join(','),
-          reason: 'Both Title and ISBN are empty. At least one identifier is required.'
-        });
-      } else {
-        rows.push({ title, author, isbn, category, copies, description });
-      }
+    const { rows, errors } = rowsFromMatrix(rawMatrix, {
+      titleIdx, authorIdx, isbnIdx, categoryIdx, copiesIdx, descriptionIdx,
     });
-
     setParsedRows(rows);
     setErrorLogs(errors);
     setStep(3);
@@ -336,6 +673,13 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
       alert('No books detected to import.');
       return;
     }
+
+    // Final permission gate — nothing is written to the catalogue until the
+    // librarian explicitly confirms here.
+    const proceed = window.confirm(
+      `Add these ${parsedRows.length} book${parsedRows.length !== 1 ? 's' : ''} to the library catalogue?\n\nThey will be looked up online and saved permanently. Click Cancel to review them again.`
+    );
+    if (!proceed) return;
 
     setIsSyncing(true);
     setSyncProgress({ current: 0, total: parsedRows.length });
@@ -527,7 +871,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
               <div className="text-center max-w-xl mx-auto space-y-2">
                  <h4 className="text-xl font-serif font-black text-zera-emerald">Upload or Paste Book Index</h4>
                  <p className="text-xs text-natural-muted leading-relaxed font-medium">
-                   Quickly import multiple titles into Zera library database. We support dragging comma-separated files (<span className="font-bold text-zera-emerald">.csv</span>), plain lists (<span className="font-bold text-zera-emerald">.txt</span>), or copying directly from Excel tables.
+                   Quickly import multiple titles into Zera library database. We support Excel workbooks (<span className="font-bold text-zera-emerald">.xlsx</span>), comma-separated files (<span className="font-bold text-zera-emerald">.csv</span>), plain lists (<span className="font-bold text-zera-emerald">.txt</span>), book-list documents (<span className="font-bold text-zera-emerald">.pdf</span>), or copying directly from a sheet.
                  </p>
               </div>
 
@@ -544,26 +888,39 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
                 onDrop={handleDrop}
               >
                 <div className="w-16 h-16 bg-white border border-natural-border rounded-2xl flex items-center justify-center text-zera-emerald shadow-sm mb-4 transition-transform group-hover:scale-110">
-                  <UploadCloud className="w-8 h-8" />
+                  {fileLoading ? <Loader2 className="w-8 h-8 animate-spin" /> : <UploadCloud className="w-8 h-8" />}
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm font-black text-natural-text">Drag & drop your files here</p>
-                  <p className="text-xs text-natural-muted">or click to choose files from disk</p>
+                  {fileLoading ? (
+                    <p className="text-sm font-black text-natural-text">Reading your file…</p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-black text-natural-text">Drag & drop your files here</p>
+                      <p className="text-xs text-natural-muted">Excel, CSV, TXT or PDF — or click to choose from disk</p>
+                    </>
+                  )}
                 </div>
-                <button 
+                <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="mt-6 px-6 py-2.5 bg-white border border-natural-border hover:border-zera-emerald/30 text-natural-text text-xs font-black uppercase tracking-wider rounded-xl shadow-sm hover:shadow transition-all"
+                  disabled={fileLoading}
+                  className="mt-6 px-6 py-2.5 bg-white border border-natural-border hover:border-zera-emerald/30 text-natural-text text-xs font-black uppercase tracking-wider rounded-xl shadow-sm hover:shadow transition-all disabled:opacity-50"
                 >
                   Choose File
                 </button>
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   ref={fileInputRef}
-                  className="hidden" 
-                  accept=".csv,.txt"
+                  className="hidden"
+                  accept=".csv,.txt,.pdf,.xlsx,.xlsm,.xlsb,.xls"
                   onChange={handleFileSelect}
                 />
               </div>
+
+              {fileError && (
+                <p className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 flex items-start gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {fileError}
+                </p>
+              )}
 
               {/* Import from Link (Google Sheet / CSV URL) */}
               <div className="space-y-3">
@@ -778,37 +1135,70 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
             <div className="space-y-6">
               
               {!isSyncing && (
-                <div className="text-center max-w-xl mx-auto space-y-4">
-                  <BookOpen className="w-12 h-12 text-zera-emerald mx-auto animate-bounce" />
-                  <div className="space-y-1">
-                     <h4 className="text-xl font-serif font-black text-zera-emerald">Ready to Catalog {parsedRows.length} Book{parsedRows.length !== 1 ? 's' : ''}</h4>
+                <div className="space-y-5">
+                  <div className="text-center max-w-xl mx-auto space-y-1.5">
+                     <BookOpen className="w-10 h-10 text-zera-emerald mx-auto" />
+                     <h4 className="text-xl font-serif font-black text-zera-emerald">Review {parsedRows.length} Book{parsedRows.length !== 1 ? 's' : ''}</h4>
                      <p className="text-xs text-natural-muted font-medium">
-                       Each book in the register will be matched with the Z39.50 (Library of Congress) and Google Books directories, download and assign their covers, allocate barcodes, and update the catalog database.
+                       Here's what we read from your file. Click <span className="font-bold text-zera-emerald">Yes, add them</span> and we'll look up covers &amp; details, assign accession numbers, and catalog them. <span className="font-bold">Nothing is saved until you confirm.</span>
                      </p>
                   </div>
-                  
+
                   {errorLogs.length > 0 && (
                     <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-xs border border-red-100 flex items-start gap-2 max-w-md mx-auto text-left">
                        <AlertTriangle className="w-5 h-5 shrink-0" />
                        <div>
-                         <p className="font-bold">Row Errors Skipped ({errorLogs.length})</p>
-                         <p className="opacity-90">{errorLogs.length} rows could not be parsed: missing both Book titles & ISBN codes.</p>
+                         <p className="font-bold">{errorLogs.length} row{errorLogs.length !== 1 ? 's' : ''} skipped</p>
+                         <p className="opacity-90">Missing both a title and an ISBN — these won't be added.</p>
                        </div>
                     </div>
                   )}
 
-                  <div className="flex justify-center gap-3 pt-4">
-                    <button 
+                  {/* Review list — the exact books that will be catalogued */}
+                  <div className="border border-natural-border rounded-2xl overflow-hidden bg-white">
+                    <div className="max-h-[320px] overflow-y-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-natural-bg text-natural-muted select-none sticky top-0">
+                          <tr>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider">#</th>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider">Title</th>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider">Author</th>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider">ISBN</th>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider">Category</th>
+                            <th className="px-4 py-2.5 font-black uppercase text-[9px] tracking-wider text-center">Copies</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-natural-bg/60 text-natural-text">
+                          {parsedRows.map((r, i) => (
+                            <tr key={i} className="hover:bg-natural-bg/30">
+                              <td className="px-4 py-2 text-natural-muted font-mono text-[10px]">{i + 1}</td>
+                              <td className="px-4 py-2 font-bold max-w-xs truncate" title={r.title}>
+                                {r.title || <span className="text-natural-muted italic font-normal">will look up by ISBN</span>}
+                              </td>
+                              <td className="px-4 py-2 text-natural-muted truncate max-w-[9rem]" title={r.author}>{r.author || '—'}</td>
+                              <td className="px-4 py-2 font-mono text-[10px] text-natural-muted">{r.isbn || '—'}</td>
+                              <td className="px-4 py-2 text-natural-muted truncate max-w-[8rem]" title={r.category}>{r.category || '—'}</td>
+                              <td className="px-4 py-2 text-center font-bold">{r.copies}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center gap-3 pt-1">
+                    <button
                       onClick={() => setStep(headers.length > 0 ? 2 : 1)}
-                      className="px-6 py-3 bg-natural-bg border border-natural-border text-natural-text text-xs font-black uppercase tracking-widest rounded-xl hover:bg-natural-border/30 transition-all"
+                      className="px-5 py-3 bg-natural-bg border border-natural-border text-natural-text text-xs font-black uppercase tracking-widest rounded-xl hover:bg-natural-border/30 transition-all"
                     >
-                      Back & Adjust
+                      {headers.length > 0 ? 'Adjust columns' : 'Back'}
                     </button>
-                    <button 
+                    <button
                       onClick={triggerSearchAndSync}
-                      className="px-10 py-4 bg-zera-emerald text-white hover:bg-zera-emerald-dark font-black uppercase text-xs tracking-widest rounded-full shadow-xl flex items-center gap-2 transition-all"
+                      disabled={parsedRows.length === 0}
+                      className="px-10 py-4 bg-zera-emerald text-white hover:bg-zera-emerald-dark font-black uppercase text-xs tracking-widest rounded-full shadow-xl flex items-center gap-2 transition-all disabled:opacity-50"
                     >
-                      <Play className="w-4 h-4 fill-white" /> Start Autocatalog & Cover Sync
+                      <Check className="w-4 h-4" /> Yes, add {parsedRows.length} book{parsedRows.length !== 1 ? 's' : ''}
                     </button>
                   </div>
                 </div>
@@ -959,7 +1349,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
                         <thead className="bg-natural-bg text-natural-muted select-none font-bold">
                            <tr>
                               <th className="px-5 py-3">Catalog Block</th>
-                              <th className="px-5 py-3">Allocated Barcode</th>
+                              <th className="px-5 py-3">Allocated Accession No.</th>
                               <th className="px-5 py-3">Sync Stream / Result</th>
                               <th className="px-5 py-3">Stacks Inventory</th>
                            </tr>

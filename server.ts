@@ -433,9 +433,140 @@ function getStaffStatus(commencement: string, leave: string | null): 'active' | 
   return 'active';
 }
 
+/**
+ * Keyless web-synopsis scraper. When the bibliographic databases (Google Books,
+ * Open Library, LOC, Wikipedia) hold no abstract for a title, this discovers the
+ * book's page on a consumer book site via DuckDuckGo's HTML endpoint (no API key)
+ * and extracts the marketing synopsis from it. Returns '' when nothing genuine is
+ * found. Best-effort and resilient: any network/parse failure just yields ''.
+ */
+async function scrapeWebSynopsis(title: string, author?: string, isbn?: string): Promise<string> {
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
+
+  const fetchText = async (url: string, timeoutMs = 5000): Promise<string> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+        signal: controller.signal,
+      });
+      if (!res.ok) return '';
+      return await res.text();
+    } catch {
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Normalise an extracted blurb: unescape JSON/unicode, strip HTML, decode entities.
+  const cleanBlurb = (raw: string): string => {
+    let s = raw;
+    s = s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
+    s = s.replace(/\\"/g, '"').replace(/\\\//g, '/').replace(/\\n/g, ' ').replace(/\\t/g, ' ').replace(/\\\\/g, '\\');
+    s = s.replace(/<br\s*\/?>/gi, ' ').replace(/<\/p>/gi, ' ').replace(/<[^>]+>/g, ' ');
+    s = s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'")
+         .replace(/&rsquo;/g, '’').replace(/&lsquo;/g, '‘').replace(/&ldquo;/g, '“').replace(/&rdquo;/g, '”')
+         .replace(/&mdash;/g, '—').replace(/&ndash;/g, '–').replace(/&nbsp;/g, ' ').replace(/&hellip;/g, '…');
+    return s.replace(/\s+/g, ' ').trim();
+  };
+
+  // Reject boilerplate / chrome that isn't an actual book synopsis.
+  const isGenuine = (s: string): boolean => {
+    const t = s.trim();
+    if (t.length < 40) return false;
+    if (/online bookstore|free shipping|enable javascript|sign in to|cookies? (policy|settings)|404|page not found/i.test(t)) return false;
+    return true;
+  };
+
+  // Read the authoritative book blurb from og:description (always the book itself,
+  // never a contributor bio), though it is sometimes truncated with an ellipsis.
+  const ogDescription = (html: string): string => {
+    const m = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i)
+           || html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+property=["']og:description["']/i);
+    return m ? cleanBlurb(m[1]) : '';
+  };
+
+  // Goodreads embeds the *full* blurb in a JSON "description" field, but the page
+  // also embeds author/contributor bios in identical fields. We anchor on the
+  // og:description (the real book) and pick the embedded copy that begins the same
+  // way — so a bio can never be returned in place of the synopsis.
+  const extractGoodreads = (html: string): string => {
+    const og = ogDescription(html);
+    const candidates: string[] = [];
+    for (const m of html.matchAll(/"description"\s*:\s*"((?:[^"\\]|\\.){40,})"/g)) {
+      const c = cleanBlurb(m[1]);
+      if (isGenuine(c)) candidates.push(c);
+    }
+    if (og) {
+      const key = og.replace(/[…\s]+$/, '').slice(0, 30).toLowerCase();
+      const full = candidates.find(c => c.toLowerCase().startsWith(key));
+      if (full) return full;                  // full blurb, verified to match the book
+      if (isGenuine(og)) return og;           // og is correct even if truncated
+    }
+    // No og to anchor on: only trust an embedded blurb when it's unambiguous.
+    return candidates.length === 1 ? candidates[0] : '';
+  };
+
+  // Generic extraction for trusted retail/publisher pages: og:description is the
+  // book blurb on these sites; fall back to the meta description. We avoid the
+  // unanchored embedded-JSON grab here as it can surface the wrong entity's text.
+  const extractGeneric = (html: string): string => {
+    const og = ogDescription(html);
+    if (isGenuine(og)) return og;
+    const md = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+    if (md) { const c = cleanBlurb(md[1]); if (isGenuine(c)) return c; }
+    return '';
+  };
+
+  try {
+    const query = `${title} ${author || ''} book synopsis`.replace(/\s+/g, ' ').trim();
+    const ddg = await fetchText(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, 5000);
+    if (!ddg) return '';
+
+    // Real organic results are encoded as uddg=<url>; skip DDG/Bing ad-tracker links.
+    const urls: string[] = [];
+    for (const m of ddg.matchAll(/uddg=([^"&]+)/g)) {
+      try {
+        const u = decodeURIComponent(m[1]);
+        if (/[?&]ad_domain=|y\.js|bing\.com\/aclick|duckduckgo\.com/i.test(u)) continue;
+        if (!urls.includes(u)) urls.push(u);
+      } catch { /* skip malformed */ }
+    }
+
+    // Whitelist of book sites whose pages expose a clean, *correct* book synopsis,
+    // ordered by reliability (Goodreads keeps the full blurb in embedded JSON).
+    // We deliberately scrape ONLY these: arbitrary pages (e.g. publisher landing
+    // pages) risk surfacing the wrong text such as an unrelated author bio, which
+    // is worse than no synopsis for a catalogue record. One URL per domain.
+    const preferred = ['goodreads.com', 'bookshop.org', 'harpercollins.com',
+                       'simonandschuster.com', 'us.macmillan.com', 'hachettebookgroup.com'];
+    const ordered = preferred
+      .map(d => urls.find(u => u.includes(d)))
+      .filter((u): u is string => Boolean(u));
+
+    for (const url of ordered.slice(0, 3)) {
+      const html = await fetchText(url, 5000);
+      if (!html) continue;
+      const blurb = url.includes('goodreads.com')
+        ? (extractGoodreads(html) || extractGeneric(html))
+        : extractGeneric(html);
+      if (isGenuine(blurb)) {
+        const host = url.replace(/^https?:\/\//, '').split('/')[0];
+        console.log(`[Web Synopsis Scraper] Found synopsis for "${title}" via ${host}`);
+        return blurb;
+      }
+    }
+  } catch (err) {
+    console.warn('[Web Synopsis Scraper] lookup failed:', err instanceof Error ? err.message : err);
+  }
+  return '';
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3003;
 
   // Middleware to enable CORS and parse JSON
   app.use(express.json());
@@ -1202,11 +1333,25 @@ async function startServer() {
       lookupLexileMeasure(title, author, isbn)
     ]);
 
+    // If the bibliographic databases held no real abstract, scrape the marketing
+    // synopsis from a consumer book site (keyless — works without the Gemini key).
+    // A found synopsis is treated exactly like a WorldCat/Google Books one, so both
+    // the AI and the offline-heuristic paths below return it verbatim.
+    const rd = retrievedData as { description?: string; [k: string]: any };
+    const rdDesc = (rd.description || '').trim();
+    const rdIsPlaceholder =
+      rdDesc.length < 15 ||
+      rdDesc === 'No synopsis/abstract available in public bibliographic databases.';
+    if (rdIsPlaceholder) {
+      const scraped = await scrapeWebSynopsis(title, retrievedData.author || author, isbn);
+      if (scraped) rd.description = scraped;
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
     const isMockKey = !apiKey || 
                       typeof apiKey !== 'string' ||
                       apiKey.trim() === '' ||
-                      !apiKey.trim().startsWith('AIzaSy') ||
+                      !(apiKey.trim().startsWith('AIzaSy') || apiKey.trim().startsWith('AQ.')) ||
                       apiKey.includes('MY_GEMINI_API_KEY') || 
                       apiKey.includes('YOUR_GEMINI_API_KEY') || 
                       apiKey.includes('your_api_key') ||
@@ -1240,10 +1385,10 @@ Published Year (retrieved): "${retrievedData.publishedYear || 'N/A'}"
 Official WorldCat Synopsis/Description: "${retrievedData.description || description || 'None'}"
 
 Please do not output any markdown text wrapping. Generate a JSON response that enriches the summary and bibliographic properties to match an academic research or library standard.
-If a real synopsis or description is available in "Official WorldCat Synopsis/Description" (and is not None/empty), you MUST output that EXACT synopsis/description verbatim in the JSON "description" field. Do NOT rewrite or summarize it. If no real synopsis or description is available, set "description" to "No synopsis/abstract available in public bibliographic databases." rather than fabricating an artificial abstract.`;
+If a real synopsis or description is available in "Official WorldCat Synopsis/Description" (and is not None/empty), you MUST output that EXACT synopsis/description verbatim in the JSON "description" field. Do NOT rewrite or summarize it. If no real synopsis is available there, AND you genuinely recognise this exact title and author, write a concise, factual 2–4 sentence synopsis grounded ONLY in what you actually know about this specific book — never invent plot points, characters, or events. If you do not genuinely know this specific title, set "description" to "No synopsis/abstract available in public bibliographic databases." rather than fabricating an abstract.`;
 
       const geminiResponse = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-2.0-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -1312,6 +1457,12 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
         parsed.description = cleanRealDesc;
       } else if (retrievedData.description && retrievedData.description.trim().length >= 15) {
         parsed.description = retrievedData.description.trim();
+      } else if (typeof parsed.description === 'string' &&
+                 parsed.description.trim().length >= 15 &&
+                 parsed.description.trim() !== 'No synopsis/abstract available in public bibliographic databases.') {
+        // No real synopsis in the public databases, but Gemini supplied a grounded
+        // synopsis from its own knowledge of the title — keep it (AI fallback).
+        parsed.description = parsed.description.trim();
       } else {
         parsed.description = "No synopsis/abstract available in public bibliographic databases.";
       }

@@ -16,9 +16,20 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
+      // Served behind the local Caddy HTTPS proxy as https://library.test, so the
+      // dev server must accept that Host header (Vite 5+ blocks unknown hosts with a
+      // 403 as DNS-rebinding protection). API routes bypass this via Express.
+      allowedHosts: ['library.test', '.test'],
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr:
+        process.env.DISABLE_HMR === 'true'
+          ? false
+          : {
+              port: process.env.HMR_PORT
+                ? parseInt(process.env.HMR_PORT, 10)
+                : 24683,
+            },
     },
   };
 });

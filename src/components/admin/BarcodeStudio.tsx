@@ -312,6 +312,9 @@ export const BarcodeStudio = () => {
     printBarcodes([item]);
   };
 
+  // Books use library "accession number" terminology; people keep "barcode".
+  const codeNoun = activeType === 'book' ? 'Accession No.' : 'Barcode';
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -376,7 +379,7 @@ export const BarcodeStudio = () => {
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-zera-emerald text-white rounded-3xl p-6 relative overflow-hidden shadow-lg border-b-4 border-zera-emerald-dark">
             <div className="relative z-10">
-              <h3 className="text-xs font-black uppercase tracking-widest opacity-70 mb-4">Next Serial</h3>
+              <h3 className="text-xs font-black uppercase tracking-widest opacity-70 mb-4">Next {codeNoun}</h3>
               <div className="flex items-end gap-2 mb-6">
                 <span className="text-4xl font-serif font-black leading-none">{nextPreview}</span>
                 <span className="text-[10px] font-bold opacity-60 mb-1">Ready for assignment</span>
@@ -446,7 +449,7 @@ export const BarcodeStudio = () => {
                       />
                     </th>
                     <th className="px-6 py-4 text-[10px] font-black text-natural-muted uppercase tracking-widest">Identify</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-natural-muted uppercase tracking-widest">Active Barcode</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-natural-muted uppercase tracking-widest">Active {codeNoun}</th>
                     <th className="px-6 py-4 text-right pr-10">Action</th>
                   </tr>
                 </thead>

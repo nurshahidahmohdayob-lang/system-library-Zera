@@ -40,6 +40,7 @@ export interface Book {
   totalCopies: number;
   availableCopies: number;
   subjects?: string[];
+  createdAt?: string;
   updatedAt: string;
   status?: string;
 }

@@ -104,7 +104,7 @@ export const BookGrid = () => {
           <input 
             id="catalog-search"
             type="text" 
-            placeholder="Search by title, author, or ISBN barcode..."
+            placeholder="Search by title, author, or ISBN..."
             className="w-full pl-14 pr-32 py-5 bg-white border-2 border-natural-border rounded-3xl focus:border-zera-emerald transition-all outline-none shadow-lg text-lg font-bold placeholder:text-natural-muted/50"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -387,7 +387,7 @@ export const BookGrid = () => {
                       <Barcode className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">ISBN / Barcode</p>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">ISBN / Accession No.</p>
                       <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBook.isbn} {selectedBook.barcode && ` / ${selectedBook.barcode}`}</p>
                     </div>
                   </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -20,12 +20,17 @@ import {
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where, writeBatch } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
 import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+
+// Import days whose books were uploaded by mistake (duplicate/broken imports)
+// and should be offered for one-click removal. Books created on any of these
+// dates are the cleanup target; the button hides itself once none remain.
+const BAD_IMPORT_DAYS = ['2026-07-08', '2026-07-09'];
 
 export const CatalogManager = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -37,13 +42,23 @@ export const CatalogManager = () => {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const itemsPerPage = 20;
+  // After adding a new book we want to jump to the page that actually contains
+  // it. The book only shows up once the Firestore snapshot re-delivers the
+  // catalogue, so we arm this ref on save and let the books effect do the jump
+  // once the new record has arrived.
+  const pendingJumpRef = useRef(false);
+  const [highlightBookId, setHighlightBookId] = useState<string | null>(null);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [multiCopyOnly, setMultiCopyOnly] = useState(false);
-  
+  // Lexile reading-level lookup & sort over the catalogue.
+  const [lexileSort, setLexileSort] = useState<'none' | 'asc' | 'desc'>('none');
+  const [lexileMin, setLexileMin] = useState('');
+  const [lexileMax, setLexileMax] = useState('');
+
   const [newBook, setNewBook] = useState<Partial<Book>>({
     title: '',
     author: '',
@@ -74,13 +89,37 @@ export const CatalogManager = () => {
       const allBooks = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Book));
       // Show books that are active or haven't been assigned a status yet (new registrations default to active)
       const activeBooks = allBooks.filter(book => book.status !== 'archived');
-      setBooks(activeBooks.sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+      // Order by when each book was catalogued, oldest first, so a freshly added
+      // book always lands at the very bottom of the list — an at-a-glance
+      // confirmation that the save worked. Records with no createdAt (older
+      // imports) are treated as oldest and fall back to alphabetical order.
+      setBooks(activeBooks.sort((a, b) => {
+        const ca = a.createdAt || '';
+        const cb = b.createdAt || '';
+        if (ca !== cb) return ca < cb ? -1 : 1;
+        return (a.title || '').localeCompare(b.title || '');
+      }));
       // Drop selections that no longer exist in the catalog
       setSelectedIds(prev => new Set([...prev].filter(id => activeBooks.some(b => b.id === id))));
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  // Once the just-added book actually appears in the refreshed catalogue, jump
+  // to the page that holds it and briefly highlight it. Waiting for it to be
+  // present (rather than jumping immediately) avoids landing on the wrong page
+  // before the Firestore snapshot has delivered the new record.
+  useEffect(() => {
+    if (!pendingJumpRef.current || !highlightBookId) return;
+    const idx = books.findIndex(b => b.id === highlightBookId);
+    if (idx === -1) return; // new book not in this snapshot yet — wait for the next
+    pendingJumpRef.current = false;
+    setPage(Math.floor(idx / itemsPerPage) + 1);
+    // Clear the highlight after a few seconds so it's just a brief flash.
+    const t = setTimeout(() => setHighlightBookId(null), 4000);
+    return () => clearTimeout(t);
+  }, [books, highlightBookId]);
 
   // Make sure a looked-up draft carries a genuine web synopsis and a Lexile
   // measure before it reaches the form, so the librarian sees (and can tweak)
@@ -146,7 +185,7 @@ export const CatalogManager = () => {
       const nextBarcode = await BarcodeService.generateNextBarcode('book');
       setNewBook(prev => ({ ...prev, barcode: nextBarcode }));
     } catch (err) {
-      alert("Failed to generate sequence barcode.");
+      alert("Failed to generate accession number.");
     } finally {
       setIsSearching(false);
     }
@@ -175,13 +214,23 @@ export const CatalogManager = () => {
         });
         setEditingBook(null);
       } else {
-        await addDoc(collection(db, 'books'), {
+        const newRef = await addDoc(collection(db, 'books'), {
           ...bookToSave,
           availableCopies: bookToSave.totalCopies,
           status: 'active',
           createdAt: now,
           updatedAt: now
         });
+        // Reset any active search/filter and jump to the last page so the newly
+        // added book (now at the bottom of the catalogue) is visible and briefly
+        // highlighted — clear confirmation the save succeeded.
+        setSearchTerm('');
+        setMultiCopyOnly(false);
+        setLexileSort('none');
+        setLexileMin('');
+        setLexileMax('');
+        pendingJumpRef.current = true;
+        setHighlightBookId(newRef.id);
       }
       
       // Close modal and clear data ONLY after successful save
@@ -362,6 +411,44 @@ export const CatalogManager = () => {
     }
   };
 
+  // One-click cleanup for books uploaded by mistake (see BAD_IMPORT_DAYS). Only
+  // books created on those dates are removed; everything else is untouched. The
+  // button that calls this is only shown while such records still exist.
+  const handleRemoveBadImport = async () => {
+    const targets = badImportBooks;
+    if (targets.length === 0) return;
+    if (targets.length > 400) {
+      alert(`Safety stop: ${targets.length} books match the cleanup dates (${BAD_IMPORT_DAYS.join(', ')}) — more than expected. Nothing was deleted; please review manually.`);
+      return;
+    }
+    if (!window.confirm(`Permanently remove these ${targets.length} mistakenly-imported books (${BAD_IMPORT_DAYS.join(', ')})? This cannot be undone.`)) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Firestore caps a batch at 500 writes; 204 fits, but chunk to be safe.
+      for (let i = 0; i < targets.length; i += 400) {
+        const batch = writeBatch(db);
+        for (const b of targets.slice(i, i + 400)) {
+          batch.delete(doc(db, 'books', b.id));
+        }
+        await batch.commit();
+      }
+      if (selectedBookForView && targets.some(b => b.id === selectedBookForView.id)) {
+        setSelectedBookForView(null);
+      }
+      setSelectedIds(new Set());
+      setPage(1);
+      // The onSnapshot listener refreshes `books` automatically.
+    } catch (error) {
+      console.error(error);
+      alert('Failed to remove the bad import: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDelete = async (id: string, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
@@ -399,11 +486,76 @@ export const CatalogManager = () => {
   const isMultiCopy = (b: Book) =>
     (b.totalCopies || 0) > 1 || (titleFreq.get(titleKey(b)) || 0) > 1;
 
+  // Parse a Lexile code ("740L", "AD610L", "BR150L", "1000L") into a sortable number.
+  // Reader-prefixes (AD/HL/IG/NC/GN) are advisory and ignored; "BR" (Beginning Reader)
+  // sits below 0L, so its number is negated. Returns null when there is no measure.
+  const parseLexile = (lex?: string): number | null => {
+    if (!lex) return null;
+    const m = lex.match(/(\d+)/);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    if (isNaN(n)) return null;
+    return /BR/i.test(lex) ? -n : n;
+  };
+
   const multiCopyBooks = books.filter(isMultiCopy);
   const multiCopyCount = multiCopyBooks.length;
-  const displayBooks = multiCopyOnly ? multiCopyBooks : books;
+
+  // Books left over from mistaken imports (see handleRemoveBadImport).
+  const badImportBooks = books.filter(b =>
+    BAD_IMPORT_DAYS.some(day => String(b.createdAt || '').startsWith(day)));
+
+  const lexMinN = lexileMin.trim() === '' ? null : parseInt(lexileMin, 10);
+  const lexMaxN = lexileMax.trim() === '' ? null : parseInt(lexileMax, 10);
+  const lexileFilterActive = lexMinN !== null || lexMaxN !== null;
+
+  let displayBooks = multiCopyOnly ? multiCopyBooks : books;
+
+  // Free-text search across the fields a librarian would look a book up by.
+  const searchQuery = searchTerm.trim().toLowerCase();
+  if (searchQuery) {
+    const terms = searchQuery.split(/\s+/);
+    displayBooks = displayBooks.filter(b => {
+      const haystack = [
+        b.title, b.author, b.isbn, b.barcode, b.category, b.publisher,
+        ...(b.subjects || []),
+      ].filter(Boolean).join(' ').toLowerCase();
+      // Every whitespace-separated term must appear (AND search).
+      return terms.every(t => haystack.includes(t));
+    });
+  }
+
+  // Lexile range lookup: keep books whose measure falls within [min, max].
+  // Records with no Lexile are excluded while a range is active.
+  if (lexileFilterActive) {
+    displayBooks = displayBooks.filter(b => {
+      const v = parseLexile(b.lexileLevel);
+      if (v === null) return false;
+      if (lexMinN !== null && v < lexMinN) return false;
+      if (lexMaxN !== null && v > lexMaxN) return false;
+      return true;
+    });
+  }
+
+  // Lexile sort: un-measured books always sink to the bottom regardless of direction.
+  if (lexileSort !== 'none') {
+    displayBooks = [...displayBooks].sort((a, b) => {
+      const va = parseLexile(a.lexileLevel);
+      const vb = parseLexile(b.lexileLevel);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return lexileSort === 'asc' ? va - vb : vb - va;
+    });
+  }
+
   const totalPages = Math.ceil(displayBooks.length / itemsPerPage);
   const paginatedBooks = displayBooks.slice((page - 1) * itemsPerPage, page * itemsPerPage);
+  const lexileMatchCount = displayBooks.length;
+  const cycleLexileSort = () => {
+    setLexileSort(s => (s === 'asc' ? 'desc' : s === 'desc' ? 'none' : 'asc'));
+    setPage(1);
+  };
 
   return (
     <div className="space-y-6 pb-20">
@@ -419,6 +571,18 @@ export const CatalogManager = () => {
           </div>
         </div>
         <div className="flex gap-3">
+          {badImportBooks.length > 0 && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={handleRemoveBadImport}
+              className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white hover:bg-amber-600 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider hover:scale-[1.01] disabled:opacity-50"
+              title={`Delete the ${badImportBooks.length} books that were imported by mistake (${BAD_IMPORT_DAYS.join(', ')}).`}
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Remove Bad Import ({badImportBooks.length})
+            </button>
+          )}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -523,7 +687,7 @@ export const CatalogManager = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">System Barcode (Asset ID)</label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Accession Number (Asset ID)</label>
                   <div className="flex gap-2">
                     <div className="relative flex-1">
                       <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
@@ -537,7 +701,7 @@ export const CatalogManager = () => {
                       type="button"
                       onClick={handleAutoBarcode}
                       className="p-3 bg-zera-yellow/20 text-zera-emerald-dark rounded-xl hover:bg-zera-yellow/40 transition-colors border border-zera-yellow/30"
-                      title="Generate Zera Serial"
+                      title="Generate accession number"
                     >
                       <Sparkles className="w-4 h-4" />
                     </button>
@@ -581,10 +745,9 @@ export const CatalogManager = () => {
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Primary Author</label>
-                <input 
-                  required
-                  placeholder="Full Name"
+                <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Primary Author <span className="text-natural-muted/60 normal-case tracking-normal font-medium">(optional)</span></label>
+                <input
+                  placeholder="Full Name (optional)"
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text" 
                   value={newBook.author} onChange={e => setNewBook({...newBook, author: e.target.value})}
                 />
@@ -707,6 +870,35 @@ export const CatalogManager = () => {
         </form>
       )}
 
+      {/* Search the catalogue */}
+      <div className="bg-white p-3 rounded-3xl border border-natural-border shadow-sm">
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted pointer-events-none" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={e => { setSearchTerm(e.target.value); setPage(1); }}
+            placeholder="Search the catalogue by title, author, ISBN, accession no. or category…"
+            className="w-full pl-11 pr-28 py-3 bg-natural-bg/50 border border-natural-border rounded-2xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-zera-emerald transition-all"
+          />
+          {searchTerm.trim() && (
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+              <span className="text-[10px] font-black text-zera-emerald uppercase tracking-widest whitespace-nowrap">
+                {displayBooks.length} found
+              </span>
+              <button
+                type="button"
+                onClick={() => { setSearchTerm(''); setPage(1); }}
+                title="Clear search"
+                className="text-natural-muted hover:text-rose-500 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Control Bar */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-3xl border border-natural-border shadow-sm">
          <div className="flex items-center gap-4 bg-natural-bg px-4 py-2 rounded-2xl">
@@ -715,6 +907,61 @@ export const CatalogManager = () => {
               {books.length} Catalogue entries
             </div>
          </div>
+
+         {/* Lexile reading-level lookup & sort */}
+         <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 px-3 py-2 bg-natural-bg rounded-2xl border border-natural-border">
+               <Sparkles className="w-3.5 h-3.5 text-zera-emerald shrink-0" />
+               <span className="text-[10px] font-black text-natural-muted uppercase tracking-widest">Lexile</span>
+               <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="Min"
+                  value={lexileMin}
+                  onChange={e => { setLexileMin(e.target.value); setPage(1); }}
+                  className="w-14 px-2 py-1 bg-white border border-natural-border rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-zera-emerald"
+                  title="Lowest Lexile measure to include (e.g. 400)"
+               />
+               <span className="text-natural-muted text-xs">–</span>
+               <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="Max"
+                  value={lexileMax}
+                  onChange={e => { setLexileMax(e.target.value); setPage(1); }}
+                  className="w-14 px-2 py-1 bg-white border border-natural-border rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-zera-emerald"
+                  title="Highest Lexile measure to include (e.g. 800)"
+               />
+               {lexileFilterActive && (
+                  <>
+                     <span className="text-[9px] font-black text-zera-emerald uppercase tracking-widest">{lexileMatchCount} hit{lexileMatchCount === 1 ? '' : 's'}</span>
+                     <button
+                        type="button"
+                        onClick={() => { setLexileMin(''); setLexileMax(''); setPage(1); }}
+                        title="Clear Lexile range"
+                        className="text-natural-muted hover:text-rose-500 transition-colors"
+                     >
+                        <X className="w-3.5 h-3.5" />
+                     </button>
+                  </>
+               )}
+            </div>
+            <button
+               type="button"
+               onClick={cycleLexileSort}
+               className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shrink-0",
+                  lexileSort !== 'none'
+                     ? "bg-zera-emerald text-white hover:bg-zera-emerald-dark"
+                     : "bg-white border border-zera-emerald/30 text-zera-emerald hover:bg-zera-emerald/5"
+               )}
+               title="Sort the catalogue by Lexile reading level (click to cycle: low→high, high→low, off)"
+            >
+               {lexileSort === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : lexileSort === 'desc' ? <ArrowDown className="w-3.5 h-3.5" /> : <ArrowUpDown className="w-3.5 h-3.5" />}
+               {lexileSort === 'asc' ? 'Low → High' : lexileSort === 'desc' ? 'High → Low' : 'Sort Lexile'}
+            </button>
+         </div>
+
          <div className="flex items-center gap-3">
             <span className="text-[10px] font-black text-natural-muted uppercase tracking-widest mr-2">Page {page} of {totalPages || 1}</span>
             <div className="flex gap-1">
@@ -756,10 +1003,21 @@ export const CatalogManager = () => {
                   }}
                 />
               </th>
-              <th className="px-8 py-5">Barcode</th>
+              <th className="px-8 py-5">Accession No.</th>
               <th className="px-8 py-5">ISBN</th>
               <th className="px-8 py-5">Title & Author</th>
               <th className="px-8 py-5">Category</th>
+              <th className="px-8 py-5">
+                <button
+                  type="button"
+                  onClick={cycleLexileSort}
+                  className="flex items-center gap-1 uppercase font-black tracking-widest hover:text-zera-emerald transition-colors"
+                  title="Sort by Lexile reading level"
+                >
+                  Lexile
+                  {lexileSort === 'asc' ? <ArrowUp className="w-3 h-3 text-zera-emerald" /> : lexileSort === 'desc' ? <ArrowDown className="w-3 h-3 text-zera-emerald" /> : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                </button>
+              </th>
               <th className="px-8 py-5">Availability</th>
               <th className="px-8 py-5 text-right">Actions</th>
             </tr>
@@ -771,7 +1029,8 @@ export const CatalogManager = () => {
                 onClick={() => setSelectedBookForView(book)}
                 className={cn(
                   "hover:bg-natural-bg/40 transition-colors group cursor-pointer",
-                  selectedIds.has(book.id) && "bg-rose-50/50"
+                  selectedIds.has(book.id) && "bg-rose-50/50",
+                  highlightBookId === book.id && "bg-zera-emerald/10 ring-2 ring-inset ring-zera-emerald animate-in fade-in"
                 )}
               >
                 <td className="pl-8 pr-2 py-5 w-12" onClick={(e) => e.stopPropagation()}>
@@ -805,12 +1064,17 @@ export const CatalogManager = () => {
                         {book.title}
 
                       </div>
-                      <div className="text-[10px] text-natural-muted font-bold uppercase tracking-wider mt-0.5">{book.author}</div>
+                      {book.author?.trim() && <div className="text-[10px] text-natural-muted font-bold uppercase tracking-wider mt-0.5">{book.author}</div>}
                     </div>
                   </div>
                 </td>
                 <td className="px-8 py-5">
                    <span className="text-[9px] font-black text-natural-muted uppercase tracking-widest px-2.5 py-1 bg-natural-bg rounded-lg border border-natural-border">{book.category}</span>
+                </td>
+                <td className="px-8 py-5">
+                   {book.lexileLevel
+                     ? <span className="text-[10px] font-black text-zera-emerald font-mono px-2.5 py-1 bg-zera-emerald/10 rounded-lg border border-zera-emerald/20">{book.lexileLevel}</span>
+                     : <span className="text-[9px] font-bold text-natural-muted/50 uppercase tracking-widest">—</span>}
                 </td>
                 <td className="px-8 py-5">
                   <div className="flex flex-col gap-1.5">
@@ -864,8 +1128,10 @@ export const CatalogManager = () => {
         )}
         
         {!loading && paginatedBooks.length === 0 && (
-          <div className="p-32 text-center text-natural-muted font-serif italic text-xl opacity-30"> 
-            Inventory records empty for this section.
+          <div className="p-32 text-center text-natural-muted font-serif italic text-xl opacity-30">
+            {searchTerm.trim()
+              ? `No books match “${searchTerm.trim()}”.`
+              : 'Inventory records empty for this section.'}
           </div>
         )}
       </div>
@@ -912,7 +1178,7 @@ export const CatalogManager = () => {
                    </span>
                 </div>
                 <h2 className="text-3xl lg:text-4xl font-serif font-black text-zera-emerald leading-tight">{selectedBookForView.title}</h2>
-                <p className="text-lg font-bold text-natural-muted italic">By {selectedBookForView.author}</p>
+                {selectedBookForView.author?.trim() && <p className="text-lg font-bold text-natural-muted italic">By {selectedBookForView.author}</p>}
               </div>
 
               <div className="grid grid-cols-2 gap-4 bg-natural-bg p-6 rounded-[24px] border border-natural-border shadow-inner">
@@ -921,8 +1187,8 @@ export const CatalogManager = () => {
                     <Barcode className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">System Barcode</p>
-                    <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBookForView.barcode || 'NO-BARCODE'}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Accession No.</p>
+                    <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBookForView.barcode || 'NO-ACCESSION-NO'}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
