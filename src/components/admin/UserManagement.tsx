@@ -5,14 +5,15 @@ import {
   query, 
   orderBy, 
   addDoc, 
-  where, 
+  where,
   getDocs,
+  getDoc,
   deleteDoc,
   doc,
   updateDoc
 } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
-import { UserProfile, Loan } from '@/src/types';
+import { UserProfile, Loan, Book as BookType } from '@/src/types';
 import { 
   User as UserIcon, 
   Mail, 
@@ -86,6 +87,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [userLoans, setUserLoans] = useState<Loan[]>([]);
+  // Book-details popup opened by clicking a borrowed title in Active Borrowings.
+  const [viewBook, setViewBook] = useState<BookType | null>(null);
+  const [viewBookLoading, setViewBookLoading] = useState<string | null>(null);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -179,9 +183,36 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
     }
   };
 
+  // Open the catalogue record for a borrowed title. We look the book up by its
+  // loan.bookId; if the book was deleted we fall back to a title match.
+  const openBookDetails = async (loan: Loan) => {
+    setViewBookLoading(loan.id);
+    try {
+      let book: BookType | null = null;
+      if (loan.bookId) {
+        const snap = await getDoc(doc(db, 'books', loan.bookId));
+        if (snap.exists()) book = { id: snap.id, ...snap.data() } as BookType;
+      }
+      if (!book && loan.bookTitle) {
+        const q = await getDocs(query(collection(db, 'books'), where('title', '==', loan.bookTitle)));
+        if (!q.empty) book = { id: q.docs[0].id, ...q.docs[0].data() } as BookType;
+      }
+      if (book) {
+        setViewBook(book);
+      } else {
+        alert('This book is no longer in the catalogue.');
+      }
+    } catch (err) {
+      console.error('Failed to load book details:', err);
+      alert('Could not load book details. Please try again.');
+    } finally {
+      setViewBookLoading(null);
+    }
+  };
+
   const handleSave = async (e?: React.BaseSyntheticEvent) => {
     if (e) e.preventDefault();
-    
+
     // Immediate feedback
     console.log("handleSave started", newUser);
     
@@ -545,15 +576,21 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
 
                 <div className="bg-natural-bg rounded-[32px] border border-natural-border p-4 space-y-3 max-h-[400px] overflow-y-auto">
                    {userLoans.length > 0 ? userLoans.map(loan => (
-                     <div key={loan.id} className="bg-white p-5 rounded-2xl border border-natural-border flex items-center justify-between group shadow-sm hover:shadow-md transition-all">
+                     <button
+                       key={loan.id}
+                       type="button"
+                       onClick={() => openBookDetails(loan)}
+                       title="View book details"
+                       className="w-full text-left bg-white p-5 rounded-2xl border border-natural-border flex items-center justify-between group shadow-sm hover:shadow-md hover:border-zera-emerald/40 transition-all cursor-pointer"
+                     >
                        <div className="flex gap-4 items-center">
-                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center transition-colors", 
+                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
                             loan.status === 'active' ? "bg-amber-50 text-amber-600 border border-amber-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"
                           )}>
-                             {loan.status === 'active' ? <Clock className="w-5 h-5" /> : <Library className="w-5 h-5" />}
+                             {viewBookLoading === loan.id ? <Loader2 className="w-5 h-5 animate-spin" /> : loan.status === 'active' ? <Clock className="w-5 h-5" /> : <Library className="w-5 h-5" />}
                           </div>
                           <div>
-                            <p className="text-sm font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight">{loan.bookTitle}</p>
+                            <p className="text-sm font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight underline decoration-transparent group-hover:decoration-zera-emerald/40 underline-offset-2">{loan.bookTitle}</p>
                             <p className="text-[10px] font-bold text-natural-muted uppercase mt-0.5">
                               Due: {format(new Date(loan.dueDate), 'MMM d, yyyy')}
                             </p>
@@ -565,7 +602,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                        )}>
                          {loan.status}
                        </div>
-                     </div>
+                     </button>
                    )) : (
                      <div className="text-center py-20 grayscale opacity-30 font-serif italic text-lg">Member has no current or historical loans.</div>
                    )}
@@ -686,6 +723,74 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
         <div className="text-center py-40 border-2 border-dashed border-natural-border rounded-[40px] opacity-30">
            <UserIcon className="w-16 h-16 mx-auto mb-4" />
            <p className="font-serif italic text-2xl">No members registered in this category.</p>
+        </div>
+      )}
+
+      {/* Book details popup — opened from a borrowed title in Active Borrowings */}
+      {viewBook && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setViewBook(null)}
+        >
+          <div
+            className="bg-white rounded-[32px] shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto animate-in zoom-in-95"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="p-8">
+              <div className="flex justify-between items-start gap-4 mb-6">
+                <div className="flex gap-4">
+                  <div className="w-24 h-32 rounded-2xl bg-natural-bg border border-natural-border overflow-hidden shrink-0 flex items-center justify-center">
+                    {viewBook.coverUrl ? (
+                      <img src={viewBook.coverUrl} alt={viewBook.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <BookOpen className="w-8 h-8 text-natural-muted opacity-40" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-serif text-xl font-black text-zera-emerald leading-tight">{viewBook.title}</h3>
+                    {viewBook.author?.trim() && <p className="text-sm font-bold text-natural-muted italic mt-1">By {viewBook.author}</p>}
+                    <span className="inline-block mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg bg-zera-emerald/10 text-zera-emerald border border-zera-emerald/20">{viewBook.category}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewBook(null)}
+                  className="p-2 hover:bg-natural-bg rounded-full transition-colors shrink-0"
+                  title="Close"
+                >
+                  <X className="w-5 h-5 text-natural-muted" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">ISBN</p>
+                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{viewBook.isbn || '—'}</p>
+                </div>
+                <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Accession No.</p>
+                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{viewBook.barcode || '—'}</p>
+                </div>
+                <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Availability</p>
+                  <p className="text-sm font-bold text-natural-text">{viewBook.availableCopies} / {viewBook.totalCopies} available</p>
+                </div>
+                {viewBook.publisher && (
+                  <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Publisher</p>
+                    <p className="text-sm font-bold text-natural-text">{viewBook.publisher}{viewBook.publishedYear ? ` (${viewBook.publishedYear})` : ''}</p>
+                  </div>
+                )}
+              </div>
+
+              {viewBook.description?.trim() && (
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-2">Synopsis</p>
+                  <p className="text-sm text-natural-text leading-relaxed">{viewBook.description}</p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -246,7 +246,7 @@ export const OnlineResources: React.FC = () => {
           <h2 className="text-3xl font-serif font-black text-zera-emerald">School Digital Gateway</h2>
           <p className="text-natural-muted font-medium">Curated, safe eBooks, databases, quizzes, interactive games, assessments, and subjects for students.</p>
         </div>
-        <div className="flex bg-white p-1 rounded-2xl border border-natural-border shadow-sm overflow-x-auto no-scrollbar">
+        <div className="flex flex-wrap shrink-0 bg-white p-1 rounded-2xl border border-natural-border shadow-sm">
           {['All', 'Primary', 'Secondary'].map((aud) => (
             <button
               key={aud}

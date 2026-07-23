@@ -1,4 +1,4 @@
-import { doc, runTransaction, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 
 export type BarcodeType = 'book' | 'student' | 'staff';
@@ -14,6 +14,30 @@ export class BarcodeService {
       case 'staff': return 'Zerastaff';
       default: return 'Zera';
     }
+  }
+
+  // The highest accession number currently in the catalogue (0 if none). Only
+  // pure book accessions "Zera<number>" count — never Zerastudent/Zerastaff.
+  private static async maxBookAccessionNumber(): Promise<number> {
+    let max = 0;
+    const snap = await getDocs(collection(db, 'books'));
+    snap.docs.forEach(docSnap => {
+      const bc = docSnap.data().barcode;
+      if (typeof bc === 'string' && /^Zera\d+$/i.test(bc)) {
+        const n = parseInt(bc.slice('Zera'.length), 10);
+        if (!isNaN(n) && n > max) max = n;
+      }
+    });
+    return max;
+  }
+
+  // Next book accession = highest in the catalogue + 1, so it always continues
+  // from the last catalogued book. Computing it does NOT consume a number —
+  // only saving a book with that accession does — so clicking "generate"
+  // repeatedly (without saving) keeps returning the same next number.
+  private static async nextBookBarcode(): Promise<string> {
+    const next = (await this.maxBookAccessionNumber()) + 1;
+    return `Zera${next.toString().padStart(2, '0')}`;
   }
 
   private static async findLowestUnusedBarcode(type: BarcodeType): Promise<string> {
@@ -88,29 +112,9 @@ export class BarcodeService {
       return nextBarcode;
     }
 
-    const counterRef = doc(db, this.getCounterPath(type));
-    const prefix = this.getPrefix(type);
-
-    try {
-      return await runTransaction(db, async (transaction) => {
-        const counterDoc = await transaction.get(counterRef);
-        
-        let nextValue = 1;
-        if (counterDoc.exists()) {
-          nextValue = counterDoc.data().value + 1;
-        }
-
-        // Update the counter
-        transaction.set(counterRef, { value: nextValue });
-
-        // Format: Zera01, Zerastudent01, etc.
-        const paddedNumber = nextValue.toString().padStart(2, '0');
-        return `${prefix}${paddedNumber}`;
-      });
-    } catch (error) {
-      console.error(`Error generating ${type} barcode:`, error);
-      throw error;
-    }
+    // Books: continue from the last catalogued accession (highest + 1). Derived
+    // live from the catalogue, so it never drifts out of sync with the books.
+    return await this.nextBookBarcode();
   }
 
   /**
@@ -120,17 +124,7 @@ export class BarcodeService {
     if (type === 'student' || type === 'staff') {
       return await this.findLowestUnusedBarcode(type);
     }
-
-    const counterRef = doc(db, this.getCounterPath(type));
-    const prefix = this.getPrefix(type);
-    const counterDoc = await getDoc(counterRef);
-    
-    let nextValue = 1;
-    if (counterDoc.exists()) {
-      nextValue = counterDoc.data().value + 1;
-    }
-    
-    const paddedNumber = nextValue.toString().padStart(2, '0');
-    return `${prefix}${paddedNumber}`;
+    // Books: the next accession is simply the highest catalogued + 1.
+    return await this.nextBookBarcode();
   }
 }

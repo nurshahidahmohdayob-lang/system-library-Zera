@@ -13,10 +13,12 @@ import {
   GraduationCap,
   Save,
   RefreshCw,
-  Copy
+  Copy,
+  RotateCcw,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { collection, query, getDocs, updateDoc, doc, where, limit } from 'firebase/firestore';
+import { collection, query, getDocs, updateDoc, doc, where, limit, writeBatch, setDoc, addDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { BarcodeService, BarcodeType } from '@/src/services/BarcodeService';
 import Barcode from 'react-barcode';
@@ -48,6 +50,16 @@ export const BarcodeStudio = () => {
   const [status, setStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const [isResetting, setIsResetting] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const [generateProgress, setGenerateProgress] = useState<{ done: number; total: number } | null>(null);
+  const [isPrintingAll, setIsPrintingAll] = useState(false);
+  // Quick "new book → assign barcode" form (book tab only).
+  const [newBookTitle, setNewBookTitle] = useState('');
+  const [newBookIsbn, setNewBookIsbn] = useState('');
+  const [creatingBook, setCreatingBook] = useState(false);
+  const [lastCreated, setLastCreated] = useState<SelectableEntity | null>(null);
   const itemsPerPage = 10;
 
   useEffect(() => {
@@ -59,9 +71,15 @@ export const BarcodeStudio = () => {
     setCurrentPage(1);
   }, [activeType, searchTerm]);
 
-  const filteredEntities = entities.filter(e => 
-    (e.title || e.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (e.barcode || '').toLowerCase().includes(searchTerm.toLowerCase())
+  const searchQuery = searchTerm.trim().toLowerCase();
+  // A full accession number (e.g. "zera40") matches a barcode EXACTLY so it never
+  // also lists "zera400".."zera409"; anything else is a partial name/barcode search.
+  const isAccessionSearch = /^zera(student|staff)?\d+$/i.test(searchQuery);
+  const filteredEntities = entities.filter(e =>
+    isAccessionSearch
+      ? (e.barcode || '').toLowerCase() === searchQuery
+      : (e.title || e.name || '').toLowerCase().includes(searchQuery) ||
+        (e.barcode || '').toLowerCase().includes(searchQuery)
   );
 
   const totalPages = Math.ceil(filteredEntities.length / itemsPerPage);
@@ -100,12 +118,14 @@ export const BarcodeStudio = () => {
     printBarcodes(itemsToPrint);
   };
 
-  const printBarcodes = (items: SelectableEntity[]) => {
-    const printWindow = window.open('', '_blank', 'width=1000,height=800');
+  const printBarcodes = (items: SelectableEntity[], preOpened?: Window | null) => {
+    // Reuse a window opened synchronously in the click handler (avoids popup
+    // blocking when the caller had to await data first); otherwise open now.
+    const printWindow = preOpened ?? window.open('', '_blank', 'width=1000,height=800');
     if (!printWindow) {
-      setStatus({ 
-        type: 'error', 
-        message: 'Popup blocked! Please allow popups to print barcodes.' 
+      setStatus({
+        type: 'error',
+        message: 'Popup blocked! Please allow popups to print barcodes.'
       });
       return;
     }
@@ -115,7 +135,6 @@ export const BarcodeStudio = () => {
         <div class="name">${item.title || item.name}</div>
         <div class="barcode-container" data-code="${item.barcode}"></div>
         <div class="code">${item.barcode}</div>
-        <div class="footer">Zera Library</div>
       </div>
     `).join('');
 
@@ -127,60 +146,62 @@ export const BarcodeStudio = () => {
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
             @page {
               size: A4;
-              margin: 10mm;
+              margin: 8mm;
             }
-            body { 
-              margin: 0; 
+            body {
+              margin: 0;
               padding: 0;
               font-family: 'Inter', sans-serif;
               background: white;
             }
             .grid {
               display: grid;
-              grid-template-columns: repeat(3, 1fr);
-              gap: 8px;
-              width: 100%;
+              grid-template-columns: repeat(auto-fill, 30mm);
+              gap: 2mm;
+              justify-content: center;
             }
+            /* Each label is a fixed 30mm x 15mm sticker */
             .label {
+              width: 30mm;
+              height: 15mm;
+              box-sizing: border-box;
               text-align: center;
-              padding: 12px;
-              border: 1px solid #e4e4e7;
-              border-radius: 8px;
+              padding: 0.8mm;
+              border: 0.2mm solid #e4e4e7;
+              border-radius: 1mm;
               break-inside: avoid;
               background: white;
-              height: 140px;
               display: flex;
               flex-direction: column;
+              align-items: center;
               justify-content: center;
-              margin-bottom: 5px;
+              overflow: hidden;
             }
             .name {
-              font-size: 10px;
-              font-weight: 900;
-              margin-bottom: 6px;
+              font-size: 4.5pt;
+              line-height: 1.05;
+              font-weight: 700;
               color: #18181b;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
+              max-width: 100%;
+              /* Show the full title — wrap onto as many lines as needed */
+              white-space: normal;
+              word-break: break-word;
+              overflow-wrap: anywhere;
+            }
+            .barcode-container {
+              margin: 0.3mm 0;
             }
             .barcode-container canvas {
-              max-width: 100%;
-              height: auto !important;
+              width: 27mm !important;
+              height: 6mm !important;
+              display: block;
             }
             .code {
-              font-size: 8px;
+              font-size: 4.5pt;
+              line-height: 1;
               font-weight: 700;
-              letter-spacing: 0.1em;
-              color: #52525b;
-              margin-top: 4px;
-              text-transform: uppercase;
-            }
-            .footer {
-              margin-top: 4px;
-              font-size: 6px;
-              font-weight: 900;
-              color: #a1a1aa;
               letter-spacing: 0.05em;
+              color: #52525b;
               text-transform: uppercase;
             }
           </style>
@@ -198,8 +219,8 @@ export const BarcodeStudio = () => {
                 const canvas = document.createElement('canvas');
                 JsBarcode(canvas, code, {
                   format: "CODE128",
-                  width: 1.2,
-                  height: 40,
+                  width: 2,
+                  height: 60,
                   displayValue: false,
                   margin: 0
                 });
@@ -284,6 +305,97 @@ export const BarcodeStudio = () => {
     }
   };
 
+  // Bulk reset: clear every active accession number for the current tab's type
+  // and reset that sequence's counter back to zero (next issued = Zera01).
+  const handleResetAll = async () => {
+    setShowResetConfirm(false);
+    setIsResetting(true);
+    try {
+      // Fetch the full set for this type (not just the paginated/limited view).
+      const snap = activeType === 'book'
+        ? await getDocs(collection(db, 'books'))
+        : await getDocs(query(collection(db, 'users'), where('role', '==', activeType)));
+
+      const docsToClear = snap.docs.filter(d => {
+        const v = d.data().barcode;
+        return v !== null && v !== undefined && v !== '';
+      });
+
+      // Clear barcodes in batches (Firestore caps a batch at 500 writes).
+      for (let i = 0; i < docsToClear.length; i += 400) {
+        const batch = writeBatch(db);
+        docsToClear.slice(i, i + 400).forEach(d => batch.update(d.ref, { barcode: null }));
+        await batch.commit();
+      }
+
+      // Reset the sequence counter so the next issued number restarts at 01.
+      const barcodeType = mapEntityTypeToBarcodeType(activeType);
+      await setDoc(doc(db, `counters/barcodes_${barcodeType}`), { value: 0 });
+
+      await fetchEntities();
+      await loadNextPreview();
+
+      const n = docsToClear.length;
+      setStatus({
+        type: 'success',
+        message: `Reset complete — cleared ${n} ${activeType} ${codeNoun.toLowerCase()}${n === 1 ? '' : 's'} and restarted the sequence at 01.`
+      });
+    } catch (err) {
+      console.error(err);
+      setStatus({ type: 'error', message: 'Failed to reset accession numbers.' });
+    } finally {
+      setIsResetting(false);
+      setTimeout(() => setStatus(null), 4000);
+    }
+  };
+
+  // Bulk generate: assign an accession number to every entity of the current
+  // tab's type that does not have one yet. Existing barcodes are left untouched,
+  // so re-clicking only fills in the gaps.
+  const handleGenerateAll = async () => {
+    setIsGeneratingAll(true);
+    try {
+      const snap = activeType === 'book'
+        ? await getDocs(collection(db, 'books'))
+        : await getDocs(query(collection(db, 'users'), where('role', '==', activeType)));
+
+      const missing = snap.docs.filter(d => {
+        const v = d.data().barcode;
+        return v === null || v === undefined || v === '';
+      });
+
+      if (missing.length === 0) {
+        setStatus({ type: 'success', message: `Every ${activeType} already has ${codeNoun === 'Accession No.' ? 'an accession number' : 'a barcode'}.` });
+        return;
+      }
+
+      const barcodeType = mapEntityTypeToBarcodeType(activeType);
+      const collectionName = activeType === 'book' ? 'books' : 'users';
+
+      // Sequential: each number depends on the previous one being committed
+      // (the counter increments / lowest-unused scan must see the prior write).
+      let done = 0;
+      setGenerateProgress({ done: 0, total: missing.length });
+      for (const d of missing) {
+        const newBarcode = await BarcodeService.generateNextBarcode(barcodeType);
+        await updateDoc(doc(db, collectionName, d.id), { barcode: newBarcode });
+        done++;
+        setGenerateProgress({ done, total: missing.length });
+      }
+
+      await fetchEntities();
+      await loadNextPreview();
+      setStatus({ type: 'success', message: `Generated ${done} ${activeType} ${codeNoun.toLowerCase()}${done === 1 ? '' : 's'}.` });
+    } catch (err) {
+      console.error(err);
+      setStatus({ type: 'error', message: 'Failed to generate barcodes for all.' });
+    } finally {
+      setIsGeneratingAll(false);
+      setGenerateProgress(null);
+      setTimeout(() => setStatus(null), 4000);
+    }
+  };
+
   const handleGenerate = async (entity: SelectableEntity) => {
     setIsGenerating(entity.id);
     try {
@@ -307,9 +419,101 @@ export const BarcodeStudio = () => {
     }
   };
 
+  // Create a brand-new book record and assign it the next accession number in
+  // one step, so a physical new book can be catalogued and barcoded right here.
+  const handleCreateBookWithBarcode = async () => {
+    const title = newBookTitle.trim();
+    if (!title) {
+      setStatus({ type: 'error', message: 'Enter a book title first.' });
+      setTimeout(() => setStatus(null), 3000);
+      return;
+    }
+    setCreatingBook(true);
+    setLastCreated(null);
+    try {
+      const newBarcode = await BarcodeService.generateNextBarcode('book');
+      const now = new Date().toISOString();
+      const ref = await addDoc(collection(db, 'books'), {
+        title,
+        author: '',
+        isbn: newBookIsbn.trim(),
+        barcode: newBarcode,
+        category: 'Uncategorised',
+        description: '',
+        coverUrl: '',
+        totalCopies: 1,
+        availableCopies: 1,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const created: SelectableEntity = { id: ref.id, title, barcode: newBarcode, type: 'book' };
+      // Show it at the top of the list right away.
+      setEntities(prev => [created, ...prev.filter(e => e.id !== ref.id)]);
+      setLastCreated(created);
+      setNewBookTitle('');
+      setNewBookIsbn('');
+      setStatus({ type: 'success', message: `Created “${title}” and assigned accession no. ${newBarcode}.` });
+      loadNextPreview();
+    } catch (err) {
+      console.error(err);
+      setStatus({ type: 'error', message: 'Failed to create the book. Are you signed in as an admin?' });
+    } finally {
+      setCreatingBook(false);
+      setTimeout(() => setStatus(null), 4000);
+    }
+  };
+
   const handlePrint = (item: SelectableEntity) => {
     if (!item.barcode) return;
     printBarcodes([item]);
+  };
+
+  // Print every barcode for the current tab's type (full set, not just the
+  // visible page). The window is opened up-front so the async fetch below
+  // doesn't get caught by the popup blocker.
+  const handlePrintAll = async () => {
+    const printWindow = window.open('', '_blank', 'width=1000,height=800');
+    if (!printWindow) {
+      setStatus({ type: 'error', message: 'Popup blocked! Please allow popups to print barcodes.' });
+      setTimeout(() => setStatus(null), 3000);
+      return;
+    }
+    printWindow.document.write('<p style="font-family:sans-serif;padding:40px;color:#52525b">Preparing barcodes…</p>');
+
+    setIsPrintingAll(true);
+    try {
+      const snap = activeType === 'book'
+        ? await getDocs(collection(db, 'books'))
+        : await getDocs(query(collection(db, 'users'), where('role', '==', activeType)));
+
+      const items: SelectableEntity[] = snap.docs
+        .filter(d => !!d.data().barcode)
+        .map(d => {
+          const data = d.data();
+          return activeType === 'book'
+            ? { id: d.id, title: data.title, barcode: data.barcode, type: 'book' as EntityType }
+            : { id: d.id, name: data.name, barcode: data.barcode, role: data.role, type: activeType };
+        });
+
+      if (items.length === 0) {
+        printWindow.close();
+        setStatus({ type: 'error', message: `No ${activeType}s have ${codeNoun === 'Accession No.' ? 'an accession number' : 'a barcode'} to print yet.` });
+        setTimeout(() => setStatus(null), 3000);
+        return;
+      }
+
+      printBarcodes(items, printWindow);
+      setStatus({ type: 'success', message: `Sent ${items.length} ${activeType} barcode${items.length === 1 ? '' : 's'} to print.` });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err) {
+      console.error(err);
+      printWindow.close();
+      setStatus({ type: 'error', message: 'Failed to prepare barcodes for printing.' });
+      setTimeout(() => setStatus(null), 3000);
+    } finally {
+      setIsPrintingAll(false);
+    }
   };
 
   // Books use library "accession number" terminology; people keep "barcode".
@@ -317,6 +521,59 @@ export const BarcodeStudio = () => {
 
   return (
     <div className="space-y-6">
+      {/* Reset confirmation modal */}
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {showResetConfirm && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+              onClick={() => setShowResetConfirm(false)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-natural-border relative"
+              >
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  className="absolute top-4 right-4 p-1.5 rounded-lg text-natural-muted hover:bg-natural-bg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+                <div className="p-3 bg-red-50 rounded-2xl w-fit mb-4">
+                  <RotateCcw className="w-6 h-6 text-red-500" />
+                </div>
+                <h3 className="text-lg font-serif font-black text-zera-emerald mb-2">Reset {activeType} accession numbers?</h3>
+                <p className="text-xs font-medium text-natural-muted leading-relaxed mb-6">
+                  This clears the <span className="font-bold">Active {codeNoun}</span> from every {activeType} in the library and restarts the sequence — the next one issued will be <span className="font-bold text-zera-emerald">{codeNoun === 'Accession No.' ? 'Zera01' : nextPreview.replace(/\d+$/, '01')}</span>. Existing {activeType === 'book' ? 'books' : `${activeType}s`} are not deleted. This cannot be undone.
+                </p>
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setShowResetConfirm(false)}
+                    className="px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border border-natural-border text-natural-muted hover:bg-natural-bg transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleResetAll}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/20 transition-all active:scale-95"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset All
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -371,6 +628,38 @@ export const BarcodeStudio = () => {
               Teachers
             </button>
           </div>
+
+          <button
+            onClick={handleGenerateAll}
+            disabled={isGeneratingAll || isResetting}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest shadow-sm hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50"
+            title={`Assign ${codeNoun.toLowerCase()} to every ${activeType} that doesn't have one`}
+          >
+            {isGeneratingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            {isGeneratingAll && generateProgress
+              ? `Generating ${generateProgress.done}/${generateProgress.total}`
+              : 'Generate All'}
+          </button>
+
+          <button
+            onClick={handlePrintAll}
+            disabled={isPrintingAll || isGeneratingAll || isResetting}
+            className="flex items-center gap-2 px-4 py-2.5 bg-zera-emerald text-white rounded-xl font-black text-[10px] uppercase tracking-widest shadow-sm hover:bg-zera-emerald-dark transition-all active:scale-95 disabled:opacity-50"
+            title={`Print every ${activeType} ${codeNoun.toLowerCase()}`}
+          >
+            {isPrintingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+            Print All
+          </button>
+
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            disabled={isResetting || isGeneratingAll}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white text-red-500 border border-red-100 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-sm hover:bg-red-50 hover:border-red-200 transition-all active:scale-95 disabled:opacity-50"
+            title={`Clear all ${activeType} accession numbers and restart the sequence`}
+          >
+            {isResetting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            Reset All
+          </button>
         </div>
       </div>
 
@@ -390,6 +679,58 @@ export const BarcodeStudio = () => {
             </div>
             <RefreshCw className="absolute -right-4 -bottom-4 w-32 h-32 opacity-10 rotate-12 pointer-events-none" />
           </div>
+
+          {activeType === 'book' && (
+            <div className="bg-white border border-natural-border rounded-3xl p-6 shadow-sm">
+              <h3 className="text-sm font-bold mb-1 flex items-center gap-2">
+                <Plus className="w-4 h-4 text-zera-emerald" /> New Book → Assign Barcode
+              </h3>
+              <p className="text-[11px] text-natural-muted font-medium mb-4">
+                Add a new book and give it the next accession number in one step.
+              </p>
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={newBookTitle}
+                  onChange={(e) => setNewBookTitle(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreateBookWithBarcode(); } }}
+                  placeholder="Book title (required)"
+                  className="w-full bg-natural-bg border-2 border-natural-border focus:border-zera-emerald rounded-2xl py-3 px-4 text-xs font-bold outline-none transition-all placeholder:text-natural-muted/50"
+                />
+                <input
+                  type="text"
+                  value={newBookIsbn}
+                  onChange={(e) => setNewBookIsbn(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreateBookWithBarcode(); } }}
+                  placeholder="ISBN (optional)"
+                  className="w-full bg-natural-bg border-2 border-natural-border focus:border-zera-emerald rounded-2xl py-3 px-4 text-xs font-mono outline-none transition-all placeholder:text-natural-muted/50"
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateBookWithBarcode}
+                  disabled={creatingBook || !newBookTitle.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-zera-emerald text-white rounded-2xl py-3 text-xs font-black uppercase tracking-widest hover:bg-zera-emerald-dark shadow-md disabled:opacity-40 transition-all"
+                >
+                  {creatingBook ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarcodeIcon className="w-4 h-4" />} Create &amp; Assign Barcode
+                </button>
+              </div>
+              {lastCreated && (
+                <div className="mt-4 p-4 rounded-2xl bg-zera-emerald/5 border border-zera-emerald/20 flex items-center justify-between gap-3 animate-in fade-in">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-natural-text truncate">{lastCreated.title}</p>
+                    <p className="text-[11px] font-mono font-black text-zera-emerald">{lastCreated.barcode}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handlePrint(lastCreated)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-white border border-zera-emerald/30 text-zera-emerald rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zera-emerald/5 shrink-0"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Print
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="bg-white border border-natural-border rounded-3xl p-6 shadow-sm">
             <h3 className="text-sm font-bold mb-4">Search & Filter</h3>

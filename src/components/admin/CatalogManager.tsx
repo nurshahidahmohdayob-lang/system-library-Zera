@@ -20,17 +20,12 @@ import {
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
 import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
-
-// Import days whose books were uploaded by mistake (duplicate/broken imports)
-// and should be offered for one-click removal. Books created on any of these
-// dates are the cleanup target; the button hides itself once none remain.
-const BAD_IMPORT_DAYS = ['2026-07-08', '2026-07-09'];
 
 export const CatalogManager = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -48,6 +43,11 @@ export const CatalogManager = () => {
   // once the new record has arrived.
   const pendingJumpRef = useRef(false);
   const [highlightBookId, setHighlightBookId] = useState<string | null>(null);
+  // Refs so opening the Add/Edit form scrolls it into view and focuses the
+  // title — otherwise editing a book far down the list opens the form off-screen
+  // at the top of the page and looks like nothing happened.
+  const formRef = useRef<HTMLFormElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -271,6 +271,17 @@ export const CatalogManager = () => {
     setIsAdding(true);
   };
 
+  // When the Add/Edit form opens, scroll it into view and focus the title so
+  // the librarian lands directly on the field they want to change.
+  useEffect(() => {
+    if (!isAdding) return;
+    const t = setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      titleInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(t);
+  }, [isAdding, editingBook]);
+
   // Replaces a stored placeholder/missing description and missing Lexile level
   // with real values looked up on the web, directly from the detail view.
   const handleRefreshSynopsis = async () => {
@@ -411,44 +422,6 @@ export const CatalogManager = () => {
     }
   };
 
-  // One-click cleanup for books uploaded by mistake (see BAD_IMPORT_DAYS). Only
-  // books created on those dates are removed; everything else is untouched. The
-  // button that calls this is only shown while such records still exist.
-  const handleRemoveBadImport = async () => {
-    const targets = badImportBooks;
-    if (targets.length === 0) return;
-    if (targets.length > 400) {
-      alert(`Safety stop: ${targets.length} books match the cleanup dates (${BAD_IMPORT_DAYS.join(', ')}) — more than expected. Nothing was deleted; please review manually.`);
-      return;
-    }
-    if (!window.confirm(`Permanently remove these ${targets.length} mistakenly-imported books (${BAD_IMPORT_DAYS.join(', ')})? This cannot be undone.`)) {
-      return;
-    }
-
-    setSaving(true);
-    try {
-      // Firestore caps a batch at 500 writes; 204 fits, but chunk to be safe.
-      for (let i = 0; i < targets.length; i += 400) {
-        const batch = writeBatch(db);
-        for (const b of targets.slice(i, i + 400)) {
-          batch.delete(doc(db, 'books', b.id));
-        }
-        await batch.commit();
-      }
-      if (selectedBookForView && targets.some(b => b.id === selectedBookForView.id)) {
-        setSelectedBookForView(null);
-      }
-      setSelectedIds(new Set());
-      setPage(1);
-      // The onSnapshot listener refreshes `books` automatically.
-    } catch (error) {
-      console.error(error);
-      alert('Failed to remove the bad import: ' + (error instanceof Error ? error.message : String(error)));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleDelete = async (id: string, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
@@ -501,10 +474,6 @@ export const CatalogManager = () => {
   const multiCopyBooks = books.filter(isMultiCopy);
   const multiCopyCount = multiCopyBooks.length;
 
-  // Books left over from mistaken imports (see handleRemoveBadImport).
-  const badImportBooks = books.filter(b =>
-    BAD_IMPORT_DAYS.some(day => String(b.createdAt || '').startsWith(day)));
-
   const lexMinN = lexileMin.trim() === '' ? null : parseInt(lexileMin, 10);
   const lexMaxN = lexileMax.trim() === '' ? null : parseInt(lexileMax, 10);
   const lexileFilterActive = lexMinN !== null || lexMaxN !== null;
@@ -514,15 +483,24 @@ export const CatalogManager = () => {
   // Free-text search across the fields a librarian would look a book up by.
   const searchQuery = searchTerm.trim().toLowerCase();
   if (searchQuery) {
-    const terms = searchQuery.split(/\s+/);
-    displayBooks = displayBooks.filter(b => {
-      const haystack = [
-        b.title, b.author, b.isbn, b.barcode, b.category, b.publisher,
-        ...(b.subjects || []),
-      ].filter(Boolean).join(' ').toLowerCase();
-      // Every whitespace-separated term must appear (AND search).
-      return terms.every(t => haystack.includes(t));
-    });
+    // An accession number (e.g. "zera40") must match a book's barcode EXACTLY —
+    // never a substring — so "zera40" returns only Zera40, not Zera400..Zera409.
+    const isAccession = /^zera(student|staff)?\d+$/i.test(searchQuery);
+    if (isAccession) {
+      displayBooks = displayBooks.filter(b => (b.barcode || '').toLowerCase() === searchQuery);
+    } else {
+      const terms = searchQuery.split(/\s+/);
+      displayBooks = displayBooks.filter(b => {
+        // Note: barcode is intentionally NOT in the haystack — it is only matched
+        // exactly, via the accession branch above.
+        const haystack = [
+          b.title, b.author, b.isbn, b.category, b.publisher,
+          ...(b.subjects || []),
+        ].filter(Boolean).join(' ').toLowerCase();
+        // Every whitespace-separated term must appear (AND search).
+        return terms.every(t => haystack.includes(t));
+      });
+    }
   }
 
   // Lexile range lookup: keep books whose measure falls within [min, max].
@@ -571,18 +549,6 @@ export const CatalogManager = () => {
           </div>
         </div>
         <div className="flex gap-3">
-          {badImportBooks.length > 0 && (
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleRemoveBadImport}
-              className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white hover:bg-amber-600 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider hover:scale-[1.01] disabled:opacity-50"
-              title={`Delete the ${badImportBooks.length} books that were imported by mistake (${BAD_IMPORT_DAYS.join(', ')}).`}
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-              Remove Bad Import ({badImportBooks.length})
-            </button>
-          )}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -655,7 +621,7 @@ export const CatalogManager = () => {
       </div>
 
       {isAdding && (
-        <form onSubmit={handleSave} className="p-8 bg-white border-2 border-zera-emerald/30 rounded-3xl shadow-lg grid grid-cols-1 md:grid-cols-3 gap-8 animate-in fade-in slide-in-from-top-4">
+        <form ref={formRef} onSubmit={handleSave} className="p-8 bg-white border-2 border-zera-emerald/30 rounded-3xl shadow-lg grid grid-cols-1 md:grid-cols-3 gap-8 animate-in fade-in slide-in-from-top-4">
           <div className="md:col-span-1 border-b md:border-b-0 md:border-r border-natural-border pb-6 md:pb-0 md:pr-8 space-y-6 text-center">
              <div className="space-y-1 text-left">
                 <h3 className="text-lg font-black text-zera-emerald uppercase tracking-tight">
@@ -728,6 +694,7 @@ export const CatalogManager = () => {
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Book Title</label>
                 <div className="flex gap-2">
                   <input
+                    ref={titleInputRef}
                     required
                     placeholder="Official Title"
                     className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text font-bold"
@@ -779,6 +746,7 @@ export const CatalogManager = () => {
                   <option>History</option>
                   <option>Education</option>
                   <option>Story Book</option>
+                  <option>Teacher Resource</option>
                 </select>
               </div>
               <div className="space-y-2">

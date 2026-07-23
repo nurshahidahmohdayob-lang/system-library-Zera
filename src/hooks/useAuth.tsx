@@ -6,8 +6,7 @@ import {
   signInWithCustomToken,
   signOut,
   User as FirebaseUser,
-  GoogleAuthProvider,
-  signInWithPopup
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '@/src/lib/firebase';
@@ -19,7 +18,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string, requestedRole?: 'student' | 'teacher' | 'admin') => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -370,15 +369,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithGoogle = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      localStorage.removeItem('zera_active_local_credentials');
-    } catch (error: any) {
-      console.error('Google Sign-In error:', error);
-      throw error;
-    }
+  const resetPassword = async (email: string) => {
+    // Firebase sends the reset email for any account that exists; to avoid
+    // leaking which emails are registered it does not error on unknown ones.
+    await sendPasswordResetEmail(auth, email.trim());
   };
 
   const logout = async () => {
@@ -399,10 +393,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       user, 
       profile, 
       loading, 
-      login, 
-      register, 
-      loginWithGoogle, 
-      logout 
+      login,
+      register,
+      resetPassword,
+      logout
     }}>
       {children}
     </AuthContext.Provider>

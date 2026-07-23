@@ -11,6 +11,48 @@ import { HoldService } from '@/src/services/libraryService';
 
 const minHeight = (a: number, b: number) => a < b ? a : b;
 
+// Local, always-available cover placeholder (inline SVG, no network). Used when a
+// book has no coverUrl OR when its external cover link fails to load, so every
+// book always shows a cover instead of a blank box.
+const COVER_PLACEHOLDER = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' width='300' height='420' viewBox='0 0 300 420'>` +
+  `<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#064E3B'/><stop offset='1' stop-color='#059669'/></linearGradient></defs>` +
+  `<rect width='300' height='420' fill='url(#g)'/>` +
+  `<g fill='none' stroke='#ffffff' stroke-opacity='0.9' stroke-width='9' stroke-linejoin='round' stroke-linecap='round'>` +
+  `<path d='M150 148 v128'/><path d='M92 138 q29 -17 58 0 v128 q-29 -17 -58 0 z'/><path d='M208 138 q-29 -17 -58 0 v128 q29 -17 58 0 z'/></g>` +
+  `<text x='150' y='352' fill='#F6C445' font-family='Georgia, serif' font-size='19' font-weight='bold' text-anchor='middle'>Zera Library</text>` +
+  `</svg>`
+)}`;
+
+// Legacy imports set many books' coverUrl to this generic Unsplash stock image
+// as a "no cover found" placeholder — it is NOT a real cover, so we ignore it.
+const STOCK_PLACEHOLDER_MARKER = 'photo-1543004626-aa121041c291';
+const isRealCoverUrl = (url?: string) => !!(url && url.trim() && !url.includes(STOCK_PLACEHOLDER_MARKER));
+
+// Build an Open Library cover URL from an ISBN (empty if no usable ISBN).
+// `default=false` makes Open Library 404 when it has no cover, so onError fires.
+const olCover = (isbnRaw?: string) => {
+  const isbn = (isbnRaw || '').replace(/[^0-9Xx]/gi, '');
+  return isbn.length >= 10 ? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false` : '';
+};
+
+// The cover to show first: a real stored cover, else an ISBN lookup, else the placeholder.
+const initialCover = (book: Book) => (isRealCoverUrl(book.coverUrl) ? book.coverUrl! : (olCover(book.isbn) || COVER_PLACEHOLDER));
+
+// On load failure, try the ISBN lookup (if not already tried), then the local
+// placeholder. Guards prevent request loops.
+const handleCoverError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+  const img = e.currentTarget;
+  if (img.dataset.fallback === 'done') return;
+  const ol = olCover(img.dataset.isbn);
+  if (ol && !img.src.includes('covers.openlibrary.org')) {
+    img.src = ol; // book's own cover failed → try Open Library by ISBN
+    return;
+  }
+  img.dataset.fallback = 'done';
+  img.src = COVER_PLACEHOLDER;
+};
+
 export const BookGrid = () => {
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
@@ -51,7 +93,15 @@ export const BookGrid = () => {
     const q = query(collection(db, 'books'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const booksData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Book));
-      setBooks(booksData.filter(b => b.status !== 'archived'));
+      // Show all active books, ranked so real cover images come first and the
+      // no-cover (placeholder) ones fall to the back. Rank: real stored cover (2)
+      // > has an ISBN that can resolve a cover (1) > nothing (0). Stable sort
+      // keeps the updatedAt order within each rank.
+      const coverRank = (b: Book) =>
+        isRealCoverUrl(b.coverUrl) ? 2 : (olCover(b.isbn) ? 1 : 0);
+      const active = booksData.filter(b => b.status !== 'archived');
+      active.sort((a, b) => coverRank(b) - coverRank(a));
+      setBooks(active);
       setLoading(false);
     }, (error) => {
       console.error("Firestore error:", error);
@@ -62,10 +112,14 @@ export const BookGrid = () => {
 
 
 
+  const q = searchTerm.trim().toLowerCase();
   const filteredBooks = books.filter(b =>
-    b.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.author?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.isbn?.toLowerCase().includes(searchTerm.toLowerCase())
+    b.title?.toLowerCase().includes(q) ||
+    b.author?.toLowerCase().includes(q) ||
+    b.isbn?.toLowerCase().includes(q) ||
+    // Accession number (barcode, e.g. "Zera2661") — exact match so a scan pulls
+    // up the one book without prefix noise (scanning "Zera40" won't list "Zera400").
+    (q.length > 0 && b.barcode?.toLowerCase() === q)
   );
 
   // Public catalogue pagination — show 16 books per page, the rest on later pages.
@@ -104,7 +158,7 @@ export const BookGrid = () => {
           <input 
             id="catalog-search"
             type="text" 
-            placeholder="Search by title, author, or ISBN..."
+            placeholder="Search or scan by title, author, ISBN, or accession no..."
             className="w-full pl-14 pr-32 py-5 bg-white border-2 border-natural-border rounded-3xl focus:border-zera-emerald transition-all outline-none shadow-lg text-lg font-bold placeholder:text-natural-muted/50"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -178,14 +232,14 @@ export const BookGrid = () => {
                 title={isAbstractAvailable ? `Abstract: ${book.description}` : "Click to view scholastic catalog metadata"}
               >
                 <div className="aspect-[3/4.2] bg-natural-bg rounded-xl mb-2 overflow-hidden relative shadow-inner border border-natural-border/50">
-                  <img 
-                    src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400&auto=format&fit=crop'} 
+                  <img
+                    src={initialCover(book)}
+                    data-isbn={book.isbn}
                     className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                     alt={book.title}
+                    loading="lazy"
                     referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400&auto=format&fit=crop';
-                    }}
+                    onError={handleCoverError}
                   />
                   <div className="absolute top-1 right-1">
                     <span className={cn(
@@ -232,14 +286,14 @@ export const BookGrid = () => {
                 className="group cursor-pointer bg-white p-5 rounded-[24px] border border-natural-border hover:shadow-xl hover:border-zera-yellow transition-all flex flex-col sm:flex-row gap-6 items-start"
               >
                 <div className="w-20 h-28 bg-natural-bg rounded-xl overflow-hidden shrink-0 border border-natural-border relative shadow-sm">
-                  <img 
-                    src={book.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'} 
+                  <img
+                    src={initialCover(book)}
+                    data-isbn={book.isbn}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     alt={book.title}
+                    loading="lazy"
                     referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200';
-                    }}
+                    onError={handleCoverError}
                   />
                   <div className="absolute top-1 right-1">
                     <span className={cn(
@@ -352,14 +406,13 @@ export const BookGrid = () => {
 
               <div className="md:col-span-4 bg-natural-bg p-8 flex items-center justify-center border-r border-natural-border">
                 <div className="w-full max-w-[240px] aspect-[3/4.5] rounded-2xl overflow-hidden shadow-2xl border-4 border-white transform hover:rotate-1 transition-transform duration-500">
-                  <img 
-                    src={selectedBook.coverUrl || 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=600'} 
+                  <img
+                    src={initialCover(selectedBook)}
+                    data-isbn={selectedBook.isbn}
                     className="w-full h-full object-cover"
                     alt="Cover"
                     referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=600';
-                    }}
+                    onError={handleCoverError}
                   />
                 </div>
               </div>

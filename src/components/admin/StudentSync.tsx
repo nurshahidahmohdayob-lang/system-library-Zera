@@ -241,7 +241,7 @@ for (let i = 1; i <= 193; i++) {
 export const StudentSync: React.FC = () => {
   // Sync States
   const [useEmulator, setUseEmulator] = useState<boolean>(false);
-  const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>('https://zera-education.commun.cloud/api/v1');
   const [apiKey, setApiKey] = useState<string>('22|TApEAT8FlLmQw60Oy4Q4Ki9q1S0aRR3fimVs4tT34044fa2e');
   const [showConfig, setShowConfig] = useState<boolean>(false);
   
@@ -441,11 +441,16 @@ export const StudentSync: React.FC = () => {
       
       let createdCount = 0;
       let updatedCount = 0;
-      const skippedCount = 0;
-      
+      let skippedCount = 0;
+      let failedCount = 0;
+
       addLog(`Reconciling Firestore library accounts & fetching detailed API records...`);
-      
+
       for (const student of studentsToProcess) {
+        // Per-record guard: a failure on one student (a Firestore error, a bad
+        // record) must NOT abort the whole sync and drop every student processed
+        // after it (e.g. those on the last page). Log and move on.
+        try {
         // Fetch detailed profile GET /api/v1/students/{student} to get cohort & date_of_birth fields
         let detailedStudent = { ...student };
         try {
@@ -470,7 +475,18 @@ export const StudentSync: React.FC = () => {
           console.warn(`Enrichment failed for ${student.id}:`, detailErr);
         }
 
-        const personName = detailedStudent.nric_name || `${detailedStudent.first_name} ${detailedStudent.last_name}`;
+        // Commun/SSO nests the name under a `name` object ({ name: { first_name, ... } });
+        // the mock/legacy shape puts those keys at the top level. Support both, and
+        // mirror the SSO composeName() preference order so real names come through.
+        const nm = (detailedStudent.name && typeof detailedStudent.name === 'object') ? detailedStudent.name : detailedStudent;
+        const personName =
+          nm.nric_name ||
+          (nm.first_name && nm.last_name && `${nm.first_name} ${nm.last_name}`) ||
+          nm.preferred_name || nm.first_name ||
+          (typeof detailedStudent.name === 'string' ? detailedStudent.name : '') ||
+          detailedStudent.full_name ||
+          (detailedStudent.email ? detailedStudent.email.split('@')[0] : '') ||
+          'Unknown';
         const studentIdStr = detailedStudent.id !== undefined && detailedStudent.id !== null ? String(detailedStudent.id).trim() : '';
         addLog(`Processing: [ID: ${studentIdStr}] ${personName}...`);
         
@@ -556,7 +572,11 @@ export const StudentSync: React.FC = () => {
           createdCount++;
           addLog(`+ Created brand new library profile for STID ${studentIdStr}.`);
         }
-        
+        } catch (recErr: any) {
+          failedCount++;
+          addLog(`⚠ Could not sync student [ID ${student.id}] — ${(recErr && recErr.message) ? recErr.message : 'unexpected error'}. Continuing with the rest.`);
+        }
+
         // Brief timeout to let logs update nicely in real-time
         await new Promise(resolve => setTimeout(resolve, 20));
       }
@@ -569,9 +589,12 @@ export const StudentSync: React.FC = () => {
         processed: studentsToProcess.length,
         created: createdCount,
         updated: updatedCount,
-        skipped: skippedCount
+        skipped: skippedCount + failedCount
       });
-      
+
+      if (failedCount > 0) {
+        addLog(`Note: ${failedCount} record(s) failed individually and were skipped (the rest synced).`);
+      }
       addLog(`Student Directory Synchronization Completed Wisely!`);
     } catch (err: any) {
       console.error(err);

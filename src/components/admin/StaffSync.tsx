@@ -271,7 +271,7 @@ export const StaffSync: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [useEmulator, setUseEmulator] = useState(false); // Default to live server as specified
   const [showConfig, setShowConfig] = useState(false);
-  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [apiBaseUrl, setApiBaseUrl] = useState('https://zera-education.commun.cloud/api/v1');
   const [apiKey, setApiKey] = useState('23|IUgdvUdK3yUfa7IFGy3FC5ZkWAYc4E5uYYDTyTqV544970de');
   
   const [syncLogs, setSyncLogs] = useState<string[]>([]);
@@ -451,11 +451,23 @@ export const StaffSync: React.FC = () => {
       
       let createdCount = 0;
       let updatedCount = 0;
-      const skippedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
       
       addLog(`Reconciling Firestore library accounts & fetching detailed API records...`);
       
       for (const staff of staffToProcess) {
+        // Skip inactive staff — only import currently-active teachers.
+        if (staff.status && String(staff.status).toLowerCase() !== 'active') {
+          skippedCount++;
+          addLog(`Skipping inactive staff [ID: ${staff.id}] ${(staff.nric_name || `${staff.first_name || ''} ${staff.last_name || ''}`).trim()}`);
+          continue;
+        }
+
+        // Per-record guard: a failure on one staff member (a Firestore error,
+        // a bad record) must NOT abort the whole sync and drop every teacher
+        // processed after it (e.g. those on the last page). Log and move on.
+        try {
         let detailedStaff = { ...staff };
         try {
           const detailQueryParams = new URLSearchParams();
@@ -485,7 +497,19 @@ export const StaffSync: React.FC = () => {
           console.warn(`Enrichment failed for ${staff.id}:`, detailErr);
         }
 
-        const personName = detailedStaff.nric_name || `${detailedStaff.first_name} ${detailedStaff.last_name}`;
+        // Commun/SSO nests the name under a `name` object ({ name: { first_name, ... } });
+        // the mock/legacy shape puts those keys at the top level. Support both, and
+        // mirror the SSO composeName() preference order so real names come through.
+        const nm = (detailedStaff.name && typeof detailedStaff.name === 'object') ? detailedStaff.name : detailedStaff;
+        const personName =
+          nm.preferred_name ||
+          nm.nric_name ||
+          (nm.first_name && nm.last_name && `${nm.first_name} ${nm.last_name}`) ||
+          nm.first_name ||
+          (typeof detailedStaff.name === 'string' ? detailedStaff.name : '') ||
+          detailedStaff.full_name ||
+          (detailedStaff.email ? detailedStaff.email.split('@')[0] : '') ||
+          'Unknown';
         const staffIdStr = detailedStaff.id !== undefined && detailedStaff.id !== null ? String(detailedStaff.id).trim() : '';
         addLog(`Processing: [ID: ${staffIdStr}] ${personName}...`);
         
@@ -572,7 +596,11 @@ export const StaffSync: React.FC = () => {
           createdCount++;
           addLog(`+ Created brand new library profile for SFID ${staffIdStr}.`);
         }
-        
+        } catch (recErr: any) {
+          failedCount++;
+          addLog(`⚠ Could not sync staff [ID ${staff.id}] — ${(recErr && recErr.message) ? recErr.message : 'unexpected error'}. Continuing with the rest.`);
+        }
+
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       
@@ -584,9 +612,12 @@ export const StaffSync: React.FC = () => {
         processed: staffToProcess.length,
         created: createdCount,
         updated: updatedCount,
-        skipped: skippedCount
+        skipped: skippedCount + failedCount
       });
-      
+
+      if (failedCount > 0) {
+        addLog(`Note: ${failedCount} record(s) failed individually and were skipped (the rest synced).`);
+      }
       addLog(`Staff Directory Synchronization Completed Successfully!`);
     } catch (err: any) {
       console.error(err);

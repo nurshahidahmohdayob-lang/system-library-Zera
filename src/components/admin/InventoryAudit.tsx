@@ -40,6 +40,9 @@ export const InventoryAudit = () => {
   const [lastAuditSummary, setLastAuditSummary] = useState<{scanned: number, lost: number} | null>(null);
   
   const inputRef = useRef<HTMLInputElement>(null);
+  // Whole catalogue loaded once so a scan can be matched locally by accession
+  // number (barcode), ISBN or title — case-insensitively and instantly.
+  const allBooksRef = useRef<Book[]>([]);
 
   useEffect(() => {
     // Keep focus on barcode input for convenience
@@ -48,6 +51,13 @@ export const InventoryAudit = () => {
     }, 100);
     return () => clearTimeout(timer);
   }, [scannedItems.length, lastScanned]);
+
+  useEffect(() => {
+    // Preload the catalogue for fast, flexible local matching.
+    getDocs(collection(db, 'books'))
+      .then(snap => { allBooksRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() } as Book)); })
+      .catch(err => console.error('Failed to preload catalogue for audit:', err));
+  }, []);
 
   const handleScan = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -58,22 +68,35 @@ export const InventoryAudit = () => {
     setSaveSuccess(false);
 
     try {
-      // Find book by barcode or ID
-      // Some barcodes might be ISBN or custom internal IDs
-      const booksRef = collection(db, 'books');
-      const q = query(booksRef, where('barcode', '==', barcode.trim()));
-      const querySnapshot = await getDocs(q);
+      const scan = barcode.trim();
+      const scanLower = scan.toLowerCase();
+      const scanDigits = scan.replace(/[^0-9Xx]/gi, '');
 
       let foundBook: Book | null = null;
 
-      if (!querySnapshot.empty) {
-        const doc = querySnapshot.docs[0];
-        foundBook = { id: doc.id, ...doc.data() } as Book;
-      } else {
-        // Try getting by document ID directly if no barcode match
+      // Match locally against the preloaded catalogue: accession number
+      // (barcode) or ISBN case-insensitively, then title.
+      const books = allBooksRef.current;
+      if (books.length > 0) {
+        foundBook =
+          books.find(b => b.barcode && b.barcode.toLowerCase() === scanLower) ||
+          books.find(b => b.isbn && scanDigits.length >= 10 && b.isbn.replace(/[^0-9Xx]/gi, '') === scanDigits) ||
+          books.find(b => b.title && b.title.toLowerCase() === scanLower) ||
+          null;
+      }
+
+      // Fallbacks if the catalogue hasn't finished loading or nothing matched:
+      // an exact barcode query, then a direct document-ID lookup.
+      if (!foundBook) {
+        const querySnapshot = await getDocs(query(collection(db, 'books'), where('barcode', '==', scan)));
+        if (!querySnapshot.empty) {
+          const d = querySnapshot.docs[0];
+          foundBook = { id: d.id, ...d.data() } as Book;
+        }
+      }
+      if (!foundBook) {
         try {
-          const docRef = doc(db, 'books', barcode.trim());
-          const docSnap = await getDoc(docRef);
+          const docSnap = await getDoc(doc(db, 'books', scan));
           if (docSnap.exists()) {
             foundBook = { id: docSnap.id, ...docSnap.data() } as Book;
           }
@@ -94,7 +117,7 @@ export const InventoryAudit = () => {
             bookId: foundBook.id,
             title: foundBook.title,
             author: foundBook.author,
-            barcode: barcode.trim(),
+            barcode: foundBook.barcode || foundBook.isbn || barcode.trim(),
             scanTime: new Date(),
             status: 'verified'
           };
@@ -243,7 +266,7 @@ export const InventoryAudit = () => {
                   type="text"
                   value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
-                  placeholder="Scan barcode or type book ID..."
+                  placeholder="Scan accession no., ISBN, or type a title..."
                   className="w-full bg-natural-bg border-2 border-natural-border focus:border-zera-yellow rounded-2xl py-4 pl-12 pr-4 text-sm font-bold text-zera-emerald outline-none transition-all placeholder:text-natural-muted/50"
                 />
                 <Barcode className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-muted" />
@@ -304,7 +327,7 @@ export const InventoryAudit = () => {
             <ul className="text-[10px] font-bold space-y-2 relative z-10">
               <li className="flex gap-2">
                 <span className="w-4 h-4 bg-white/20 rounded-full flex items-center justify-center flex-shrink-0">1</span>
-                Scan the barcode on the back of the book or inside cover.
+                Scan the accession number (or ISBN) on the book, or type its title.
               </li>
               <li className="flex gap-2">
                 <span className="w-4 h-4 bg-white/20 rounded-full flex items-center justify-center flex-shrink-0">2</span>

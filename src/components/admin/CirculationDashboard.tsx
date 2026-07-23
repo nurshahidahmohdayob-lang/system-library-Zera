@@ -14,7 +14,7 @@ import {
   Upload
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
-import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs } from 'firebase/firestore';
+import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, QueryDocumentSnapshot } from 'firebase/firestore';
 import { Book as BookType, UserProfile, Loan } from '@/src/types';
 import { format, addDays } from 'date-fns';
 import { cn } from '@/src/lib/utils';
@@ -94,10 +94,17 @@ export const CirculationDashboard = () => {
           return;
         }
 
-        const filtered = allBooks.filter(b =>
-          b.title.toLowerCase().includes(barcode.toLowerCase()) ||
-          b.isbn.includes(barcode) ||
-          (b.barcode && b.barcode.includes(barcode))
+        // If the input IS an accession number (e.g. "Zera40", "Zerastudent12"),
+        // match ONLY that exact barcode — never a partial title/ISBN and never a
+        // longer barcode like "Zera400". Otherwise fall back to a general search.
+        const isAccession = /^zera(student|staff)?\d+$/i.test(scan);
+        const filtered = (isAccession
+          ? allBooks.filter(b => b.barcode && b.barcode.toLowerCase() === scan.toLowerCase())
+          : allBooks.filter(b =>
+              b.title.toLowerCase().includes(barcode.toLowerCase()) ||
+              (b.isbn && b.isbn.replace(/[^0-9Xx]/gi, '') === scanDigits && scanDigits.length >= 10) ||
+              (b.barcode && b.barcode.toLowerCase() === scan.toLowerCase())
+            )
         ).slice(0, 5);
 
         setBookResults(filtered);
@@ -139,24 +146,41 @@ export const CirculationDashboard = () => {
     setStatus(null);
 
     try {
-      // Search by barcode first, then isbn, then title
-      let bookSnap = await getDocs(query(collection(db, 'books'), where('barcode', '==', barcode)));
+      const raw = barcode.trim();
+      // Barcodes are stored in canonical case ("Zera40"), but a librarian may type
+      // "zera40". Firestore '==' is case-sensitive, so normalise an accession
+      // number's case before the exact lookup.
+      const normalized = /^zera(student|staff)?\d+$/i.test(raw)
+        ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+        : raw;
 
-      if (bookSnap.empty) {
-        bookSnap = await getDocs(query(collection(db, 'books'), where('isbn', '==', barcode)));
+      // Search by barcode first, then isbn, then title.
+      let bookDoc: QueryDocumentSnapshot | null = null;
+      let snap = await getDocs(query(collection(db, 'books'), where('barcode', '==', normalized)));
+      if (!snap.empty) bookDoc = snap.docs[0];
+
+      if (!bookDoc) {
+        snap = await getDocs(query(collection(db, 'books'), where('isbn', '==', raw)));
+        if (!snap.empty) bookDoc = snap.docs[0];
       }
 
-      if (bookSnap.empty) {
-        bookSnap = await getDocs(query(collection(db, 'books'), where('title', '==', barcode)));
+      if (!bookDoc) {
+        snap = await getDocs(query(collection(db, 'books'), where('title', '==', raw)));
+        if (!snap.empty) bookDoc = snap.docs[0];
       }
 
-      if (bookSnap.empty) {
+      // Last resort: case-insensitive barcode scan (covers any unusual stored casing).
+      if (!bookDoc) {
+        const all = await getDocs(collection(db, 'books'));
+        bookDoc = all.docs.find(d => (d.data().barcode || '').toLowerCase() === raw.toLowerCase()) || null;
+      }
+
+      if (!bookDoc) {
         setStatus({ type: 'error', message: 'Book not found in catalog (checked Barcode, ISBN & Title).' });
         setLoading(false);
         return;
       }
 
-      const bookDoc = bookSnap.docs[0];
       const bookData = bookDoc.data() as BookType;
 
       if (bookData.availableCopies <= 0) {
@@ -207,18 +231,28 @@ export const CirculationDashboard = () => {
     setReturnStatus(null);
 
     try {
-      // Find the book: barcode first, then ISBN, then exact title.
-      let bookSnap = await getDocs(query(collection(db, 'books'), where('barcode', '==', code)));
-      if (bookSnap.empty) bookSnap = await getDocs(query(collection(db, 'books'), where('isbn', '==', code)));
-      if (bookSnap.empty) bookSnap = await getDocs(query(collection(db, 'books'), where('title', '==', code)));
+      // Normalise accession-number case ("zera40" -> "Zera40") — Firestore '==' is case-sensitive.
+      const normalized = /^zera(student|staff)?\d+$/i.test(code)
+        ? code.charAt(0).toUpperCase() + code.slice(1).toLowerCase()
+        : code;
 
-      if (bookSnap.empty) {
+      // Find the book: barcode first, then ISBN, then exact title.
+      let bookDoc: QueryDocumentSnapshot | null = null;
+      let bookSnap = await getDocs(query(collection(db, 'books'), where('barcode', '==', normalized)));
+      if (!bookSnap.empty) bookDoc = bookSnap.docs[0];
+      if (!bookDoc) { bookSnap = await getDocs(query(collection(db, 'books'), where('isbn', '==', code))); if (!bookSnap.empty) bookDoc = bookSnap.docs[0]; }
+      if (!bookDoc) { bookSnap = await getDocs(query(collection(db, 'books'), where('title', '==', code))); if (!bookSnap.empty) bookDoc = bookSnap.docs[0]; }
+      if (!bookDoc) {
+        const all = await getDocs(collection(db, 'books'));
+        bookDoc = all.docs.find(d => (d.data().barcode || '').toLowerCase() === code.toLowerCase()) || null;
+      }
+
+      if (!bookDoc) {
         setReturnStatus({ type: 'error', message: `No catalogue match for “${code}” (checked Barcode, ISBN & Title).` });
         setReturnLoading(false);
         return;
       }
 
-      const bookDoc = bookSnap.docs[0];
       const bookData = bookDoc.data() as BookType;
 
       // Find the active loan(s) for this book. If a member happens to be
