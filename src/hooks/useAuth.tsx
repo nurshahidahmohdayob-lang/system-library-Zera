@@ -17,7 +17,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string, requestedRole?: 'student' | 'teacher' | 'admin') => Promise<void>;
+  register: (email: string, password: string, name: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -138,19 +138,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             finalProfile = updatedData;
           } else {
-            // Create default profile for first-time login
-            // Since student and teacher registration are removed/not allowed via Firebase,
-            // and librarian accounts can only be registered if they were pre-added to Firebase Auth,
-            // any new successful Auth session without an existing Firestore profile of another role
-            // must be a librarian/admin!
-            const derivedName = firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Anonymous User');
+            // Create default profile for first-time login.
+            const bootstrappedAdmins = ['nurshahidahmohdayob@gmail.com', 'shahidah.a@zera.edu.my'];
+            const email = (firebaseUser.email || '').toLowerCase();
+
+            // A member who just self-registered is flagged in localStorage → role
+            // 'teacher'. Bootstrapped emails are admins. SSO users carry a trusted
+            // claim. Otherwise it's a librarian pre-added in the Firebase console
+            // (the historical default), who gets admin.
+            const pendingMemberEmail = localStorage.getItem('zera_pending_member_registration');
+            const pendingMemberName = localStorage.getItem('zera_pending_member_name');
+            const isSelfRegisteredMember = !!email && pendingMemberEmail === email;
+
+            let role: UserProfile['role'];
+            if (bootstrappedAdmins.includes(email)) role = 'admin';
+            else if (claimRole) role = claimRole;
+            else if (isSelfRegisteredMember) role = 'teacher';
+            else role = 'admin';
+
+            const derivedName = (isSelfRegisteredMember && pendingMemberName)
+              ? pendingMemberName
+              : (firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Anonymous User'));
+
+            if (isSelfRegisteredMember) {
+              localStorage.removeItem('zera_pending_member_registration');
+              localStorage.removeItem('zera_pending_member_name');
+            }
+
             const newProfileData: any = {
               uid: firebaseUser.uid,
               name: derivedName,
               email: firebaseUser.email || '',
-              // SSO users carry a trusted role claim; only librarian (claim-less)
-              // first-logins default to admin.
-              role: claimRole ?? 'admin',
+              role,
               status: 'active',
               createdAt: serverTimestamp(),
               activeLoansCount: 0
@@ -280,41 +299,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const register = async (email: string, password: string, name: string, requestedRole: 'student' | 'teacher' | 'admin' = 'admin') => {
+  // Self-registration is for MEMBERS (teaching staff) only — never librarians/
+  // admins. Admin accounts are provisioned separately (bootstrapped emails or an
+  // admin setting a role). New members must use a Zera email; they are created
+  // with role 'teacher' and can sign in immediately.
+  const register = async (email: string, password: string, name: string) => {
     const normEmail = email.trim().toLowerCase();
 
+    // Guard: members only, Zera email only.
+    if (!normEmail.endsWith('@zera.edu.my')) {
+      throw new Error('Only Zera email addresses (@zera.edu.my) can register as a member.');
+    }
+
+    // Flag this brand-new account so onAuthStateChanged provisions it as a member
+    // (role 'teacher'), not the librarian/admin default used for pre-added emails.
+    localStorage.setItem('zera_pending_member_registration', normEmail);
+    localStorage.setItem('zera_pending_member_name', name || '');
+
     try {
-      // 1. Try to create user in Firebase Auth
-      const { user: firebaseUser } = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      
-      // 2. CRITICAL SECURITY GUARD:
-      // Since librarian registration is ONLY allowed for emails pre-added to Firebase Authentication by the administrator,
-      // any dynamically initiated registration that dynamically creates a new Firebase Auth user (meaning it successfully created a brand new user)
-      // was by definition NOT pre-added in the Firebase console!
-      // Thus, we must immediately delete this newly created user and throw a clear "Access Denied" error.
-      try {
-        await firebaseUser.delete();
-      } catch (deleteError) {
-        console.error("Failed to delete unauthorized registration:", deleteError);
-      }
-      
-      throw new Error("Access Denied: Only emails pre-added inside the Firebase Authentication console by the chief administrator are allowed to register as Librarians. Please contact your administrator to authorize your email first.");
+      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      // onAuthStateChanged now creates the member profile and sets the session.
+      return;
     } catch (error: any) {
-      if (error.message && error.message.includes("Access Denied")) {
-        throw error;
+      // If Auth creation failed, undo the pending flag.
+      if (error.code !== 'auth/network-request-failed') {
+        localStorage.removeItem('zera_pending_member_registration');
+        localStorage.removeItem('zera_pending_member_name');
       }
-      
-      // 3. If the email is already in Firebase Auth, this means they WERE indeed pre-added by the admin!
-      // We invite them to log in via the Sign In tab.
+
       if (error.code === 'auth/email-already-in-use') {
-        const err = new Error("This email is pre-authorized. Please use the 'Sign In' tab with your credentials to access your librarian account. (Note: If this is your first sign-in, your profile will auto-configure.)");
+        const err = new Error("This email already has an account. Please use 'Sign In', or 'Forgot password?' to set a new password.");
         (err as any).code = 'auth/email-already-in-use';
         throw err;
       }
 
       console.warn("Registration request failed in cloud:", error.code, error.message);
 
-      const isNetworkError = 
+      const isNetworkError =
         error.code === 'auth/network-request-failed' ||
         error.message?.toLowerCase().includes('network-request-failed') ||
         error.message?.toLowerCase().includes('failed-to-fetch') ||
@@ -322,14 +343,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error.message?.toLowerCase().includes('firebase error');
 
       if (isNetworkError) {
-        console.info("Registering user in Local High-Availability Node registry (offline simulation).");
+        console.info("Registering member in Local High-Availability Node registry (offline simulation).");
+        localStorage.removeItem('zera_pending_member_registration');
+        localStorage.removeItem('zera_pending_member_name');
 
         const offlineUid = `ha-user-${Date.now()}`;
         const newProfileData: UserProfile = {
           uid: offlineUid,
           name: name,
           email: normEmail,
-          role: 'admin', // Always register as admin offline, since students/teachers are removed/not allowed
+          role: 'teacher', // Members self-register as teaching staff, never admin.
           status: 'active',
           createdAt: new Date().toISOString(),
           activeLoansCount: 0

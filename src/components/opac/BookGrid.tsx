@@ -514,7 +514,7 @@ export const BookGrid = () => {
                       )
                     ) : (
                       <button
-                        onClick={() => alert('Sign in via the Member Portal (or through Commun) to place a hold on this title.')}
+                        onClick={() => alert('Sign in with your Zera email via the Member Portal to place a hold on this title.')}
                         className="flex-1 min-w-[180px] h-14 bg-zera-emerald text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:shadow-xl hover:scale-[1.01] transition-all flex items-center justify-center gap-2"
                       >
                         <Copy className="w-4 h-4" /> Sign in to Hold

@@ -232,11 +232,11 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
             <div className="space-y-3">
               <h2 className="text-4xl font-serif font-black text-zera-emerald">Member Borrowing Portal</h2>
               <p className="text-natural-muted font-medium max-w-md mx-auto leading-relaxed text-sm">
-                <span className="font-bold text-zera-emerald">Teachers</span> sign in with Commun to place holds and track loans. Students can look up borrowing by name below.
+                <span className="font-bold text-zera-emerald">Teachers</span> sign in with their Zera email to place holds and track loans. Students can look up borrowing by name below.
               </p>
             </div>
 
-            {/* Primary sign-in: Commun SSO — teaching staff only (gives hold + borrowing access) */}
+            {/* Primary sign-in: Zera email + password (teaching staff only) */}
             <div className="bg-white border border-natural-border rounded-[36px] p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest text-zera-emerald bg-zera-yellow/15 border border-zera-yellow/30 rounded-full py-1.5">
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -244,14 +244,14 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
               </div>
               <button
                 type="button"
-                onClick={() => { window.location.href = '/api/v1/sso/login'; }}
+                onClick={() => onOpenAuth?.()}
                 className="w-full py-4 bg-zera-emerald hover:bg-zera-emerald-dark text-white rounded-3xl font-black text-xs uppercase tracking-widest shadow-lg flex items-center justify-center gap-2.5 transition-all cursor-pointer select-none active:scale-[0.99]"
               >
                 <LogIn className="w-4 h-4" />
-                Sign in with Commun
+                Sign in with Email
               </button>
               <p className="text-[10px] font-bold text-natural-muted leading-relaxed">
-                Teachers: use your Commun login to hold books and view your loans — you'll return here already signed in.
+                Use your <span className="font-bold text-zera-emerald">@zera.edu.my</span> email. First time? Tap <span className="font-bold">“Forgot password?”</span> to set your password — a reset link is sent to your Zera (Outlook) inbox.
               </p>
             </div>
 

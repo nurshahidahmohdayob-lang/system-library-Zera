@@ -28,7 +28,8 @@ import {
   UserCircle,
   Shield,
   ShieldAlert,
-  Bookmark
+  Bookmark,
+  GitCompareArrows
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
@@ -37,6 +38,7 @@ import { BookGrid } from '@/src/components/opac/BookGrid';
 import { MemberPortal } from '@/src/components/opac/MemberPortal';
 import { BrandCharter } from '@/src/components/opac/BrandCharter';
 import { CatalogManager } from '@/src/components/admin/CatalogManager';
+import { CatalogReconcile } from '@/src/components/admin/CatalogReconcile';
 import { UserManagement } from '@/src/components/admin/UserManagement';
 import { CirculationDashboard } from '@/src/components/admin/CirculationDashboard';
 import { AdminDashboard } from '@/src/components/admin/AdminDashboard';
@@ -56,7 +58,6 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<'student' | 'teacher' | 'admin'>('admin');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [suggestLogin, setSuggestLogin] = useState(false);
@@ -80,7 +81,6 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
       setEmail('');
       setPassword('');
       setName('');
-      setRole('admin');
       setMode(initialMode);
     }
   }, [isOpen, initialMode]);
@@ -127,7 +127,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
       if (mode === 'login') {
         await login(email, password);
       } else {
-        await register(email, password, name, 'admin');
+        await register(email, password, name);
       }
       onClose();
     } catch (err: any) {
@@ -189,25 +189,25 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
                   <ZeraLogo variant="white" className="h-9" />
                 </div>
                 
-                <h3 className="text-xl font-serif font-bold text-white leading-tight">School Archive & Library Registration</h3>
-                <p className="text-xs text-white/70 mt-2 font-sans font-medium">Create your user profile to access our online catalogue, manage circulation, and borrow publications.</p>
-                
-                {/* Librarian privileges only */}
+                <h3 className="text-xl font-serif font-bold text-white leading-tight">Zera Library Membership</h3>
+                <p className="text-xs text-white/70 mt-2 font-sans font-medium">Create your member profile with your Zera email to browse the catalogue, place holds, and track your loans.</p>
+
+                {/* Member privileges */}
                 <div className="mt-8 space-y-4">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-zera-yellow italic">Librarian Access privileges:</p>
-                  
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zera-yellow italic">Member access includes:</p>
+
                   <div className="space-y-3 text-xs leading-relaxed font-sans text-white/90">
                     <div className="flex items-start gap-2">
-                      <span className="text-zera-yellow shrink-0">🛡️</span>
-                      <span>Full system custody & Library administrator dashboard.</span>
+                      <span className="text-zera-yellow shrink-0">📚</span>
+                      <span>Borrow books and place holds on titles you want.</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-zera-yellow shrink-0">📊</span>
-                      <span>Issue barcodes, manage inventory, browse detailed reports and circulation.</span>
+                      <span className="text-zera-yellow shrink-0">🔖</span>
+                      <span>Track your current loans and borrowing history.</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-zera-yellow shrink-0">🔒</span>
-                      <span>Restricted strictly to authorized administrative staff.</span>
+                      <span className="text-zera-yellow shrink-0">✉️</span>
+                      <span>Sign in with your @zera.edu.my email — reset via your Outlook inbox.</span>
                     </div>
                   </div>
                 </div>
@@ -244,27 +244,27 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
               <form onSubmit={handleSubmit} className="space-y-3">
                 {mode === 'register' && (
                   <div className="space-y-3">
-                    {/* Account Type - Locked specifically to Librarian */}
+                    {/* Account Type — members (teaching staff) only */}
                     <div className="space-y-1">
                       <label className="text-[9px] font-black uppercase tracking-wider text-natural-muted italic block px-1">
                         Account Type (Role)
                       </label>
-                      <div className="bg-red-50/60 p-3 rounded-2xl border border-red-100 flex items-center gap-2.5 text-[11px] text-red-800 font-extrabold select-none">
-                        <Shield className="w-4 h-4 text-red-600 shrink-0" />
-                        <span>Librarian (Administrative Custody)</span>
+                      <div className="bg-zera-emerald/10 p-3 rounded-2xl border border-zera-emerald/20 flex items-center gap-2.5 text-[11px] text-zera-emerald font-extrabold select-none">
+                        <Shield className="w-4 h-4 text-zera-emerald shrink-0" />
+                        <span>Member (Teaching Staff)</span>
                       </div>
                     </div>
 
-                    {/* Compact admin warning banner */}
-                    <motion.div 
+                    {/* Member info banner */}
+                    <motion.div
                       initial={{ opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex gap-2.5 text-[11px] text-amber-800 font-medium leading-normal animate-in fade-in"
+                      className="p-3 bg-zera-yellow/10 border border-zera-yellow/30 rounded-2xl flex gap-2.5 text-[11px] text-zera-emerald font-medium leading-normal animate-in fade-in"
                     >
-                      <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-amber-600 mt-0.5 animate-pulse" />
+                      <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-zera-yellow-dark mt-0.5" />
                       <div>
-                        <p className="font-extrabold text-amber-950 mb-0.5">Authorization Required</p>
-                        Librarian registration is restricted strictly to accounts pre-added in Firebase Authentication by the system administrator.
+                        <p className="font-extrabold mb-0.5">Members register here</p>
+                        Register with your <span className="font-bold">@zera.edu.my</span> email to borrow, place holds, and track loans. Librarian/admin access is granted separately.
                       </div>
                     </motion.div>
 
@@ -572,12 +572,13 @@ const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
 
 const AdminPanel = () => {
   const { profile, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'circulation' | 'holds' | 'inventory' | 'stocktake' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'reconcile' | 'circulation' | 'holds' | 'inventory' | 'stocktake' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
   const pendingHolds = usePendingHoldsCount(true);
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'catalog', label: 'Catalogue', icon: BookOpen },
+    { id: 'reconcile', label: 'Reconcile List', icon: GitCompareArrows },
     { id: 'circulation', label: 'Circulation', icon: BarChart },
     { id: 'holds', label: 'Hold Requests', icon: Bookmark, badge: pendingHolds },
     { id: 'inventory', label: 'Inventory Audit', icon: BookMarked },
@@ -667,6 +668,7 @@ const AdminPanel = () => {
           >
             {activeTab === 'dashboard' && <AdminDashboard onNavigate={setActiveTab} />}
             {activeTab === 'catalog' && <CatalogManager />}
+            {activeTab === 'reconcile' && <CatalogReconcile />}
             {activeTab === 'circulation' && <CirculationDashboard />}
             {activeTab === 'holds' && <HoldRequests />}
             {activeTab === 'students' && <UserManagement key="students" roleFilter="student" />}
