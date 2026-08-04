@@ -47,6 +47,46 @@ export async function fetchSynopsisFromWeb(book: Partial<Book>): Promise<string>
 }
 
 /**
+ * Enrich a book from the open web (via the server's DuckDuckGo scrape) — returns
+ * a genuine synopsis PLUS the web-sourced publisher, publication year, and author.
+ * Publisher/year/author are read from the server's `webSourced` block, which only
+ * ever carries real scraped values (never a fabricated heuristic fallback), so
+ * these are safe to fill into a catalogue record. Missing fields come back empty.
+ */
+export async function fetchWebEnrichment(
+  book: Partial<Book>
+): Promise<{ description: string; publisher: string; publishedYear?: number; author: string }> {
+  const empty = { description: '', publisher: '', author: '' };
+  if (!book.title && !book.isbn) return empty;
+  try {
+    const res = await fetch('/api/v1/enrich-book-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: book.title || '',
+        author: book.author || '',
+        isbn: book.isbn || '',
+        description: isRealSynopsis(book.description) ? book.description : ''
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const ws = data?.webSourced || {};
+      const yr = Number(ws.publishedYear);
+      return {
+        description: isRealSynopsis(data?.description) ? String(data.description).trim() : '',
+        publisher: typeof ws.publisher === 'string' ? ws.publisher.trim() : '',
+        publishedYear: Number.isFinite(yr) && yr > 1000 ? yr : undefined,
+        author: typeof ws.author === 'string' ? ws.author.trim() : ''
+      };
+    }
+  } catch (err) {
+    console.warn('Web enrichment lookup failed:', err);
+  }
+  return empty;
+}
+
+/**
  * True when the cover URL points at a real book jacket rather than the generic
  * Unsplash "no cover" placeholder (or being empty).
  */

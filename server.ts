@@ -440,7 +440,7 @@ function getStaffStatus(commencement: string, leave: string | null): 'active' | 
  * and extracts the marketing synopsis from it. Returns '' when nothing genuine is
  * found. Best-effort and resilient: any network/parse failure just yields ''.
  */
-async function scrapeWebSynopsis(title: string, author?: string, isbn?: string): Promise<string> {
+async function scrapeWebBookData(title: string, author?: string, isbn?: string): Promise<{ description: string; publisher: string; publishedYear?: number; author: string }> {
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
   const fetchText = async (url: string, timeoutMs = 5000): Promise<string> => {
@@ -520,10 +520,48 @@ async function scrapeWebSynopsis(title: string, author?: string, isbn?: string):
     return '';
   };
 
+  // Pull structured bibliographic fields (publisher, year, author) from the same
+  // book page — primarily via JSON-LD (schema.org/Book), then og:book:* meta tags.
+  const extractBookMeta = (html: string): { publisher: string; publishedYear?: number; author: string } => {
+    const out: { publisher: string; publishedYear?: number; author: string } = { publisher: '', author: '' };
+    const nameOf = (v: any): string => {
+      if (!v) return '';
+      if (typeof v === 'string') return cleanBlurb(v);
+      if (Array.isArray(v)) return nameOf(v[0]);
+      return cleanBlurb(v.name || '');
+    };
+    for (const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+      let json: any;
+      try { json = JSON.parse(m[1].trim()); } catch { continue; }
+      const nodes: any[] = Array.isArray(json) ? json : (json['@graph'] ? json['@graph'] : [json]);
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const type = node['@type'];
+        const isBook = type === 'Book' || (Array.isArray(type) && type.includes('Book'));
+        if (!isBook) continue;
+        if (!out.publisher && node.publisher) out.publisher = nameOf(node.publisher);
+        if (!out.author && node.author) out.author = nameOf(node.author);
+        if (out.publishedYear === undefined && (node.datePublished || node.copyrightYear)) {
+          const y = String(node.datePublished || node.copyrightYear).match(/\d{4}/);
+          if (y) out.publishedYear = parseInt(y[0], 10);
+        }
+      }
+    }
+    if (!out.author) {
+      const m = html.match(/<meta[^>]+property=["'](?:og:book:author|books:author|book:author)["'][^>]+content=["']([^"']+)["']/i);
+      if (m) out.author = cleanBlurb(m[1]);
+    }
+    if (out.publishedYear === undefined) {
+      const m = html.match(/<meta[^>]+property=["'](?:og:book:release_date|book:release_date|books:release_date)["'][^>]+content=["']([^"']+)["']/i);
+      if (m) { const y = m[1].match(/\d{4}/); if (y) out.publishedYear = parseInt(y[0], 10); }
+    }
+    return out;
+  };
+
   try {
     const query = `${title} ${author || ''} book synopsis`.replace(/\s+/g, ' ').trim();
     const ddg = await fetchText(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, 5000);
-    if (!ddg) return '';
+    if (!ddg) return { description: '', publisher: '', author: '' };
 
     // Real organic results are encoded as uddg=<url>; skip DDG/Bing ad-tracker links.
     const urls: string[] = [];
@@ -546,22 +584,39 @@ async function scrapeWebSynopsis(title: string, author?: string, isbn?: string):
       .map(d => urls.find(u => u.includes(d)))
       .filter((u): u is string => Boolean(u));
 
+    const best: { description: string; publisher: string; publishedYear?: number; author: string } =
+      { description: '', publisher: '', author: '' };
     for (const url of ordered.slice(0, 3)) {
       const html = await fetchText(url, 5000);
       if (!html) continue;
+      const host = url.replace(/^https?:\/\//, '').split('/')[0];
+
+      // Structured metadata (publisher/year/author) — keep the first found of each.
+      const meta = extractBookMeta(html);
+      if (!best.publisher && meta.publisher) best.publisher = meta.publisher;
+      if (!best.author && meta.author) best.author = meta.author;
+      if (best.publishedYear === undefined && meta.publishedYear !== undefined) best.publishedYear = meta.publishedYear;
+
+      // Synopsis (unchanged extraction logic).
       const blurb = url.includes('goodreads.com')
         ? (extractGoodreads(html) || extractGeneric(html))
         : extractGeneric(html);
-      if (isGenuine(blurb)) {
-        const host = url.replace(/^https?:\/\//, '').split('/')[0];
-        console.log(`[Web Synopsis Scraper] Found synopsis for "${title}" via ${host}`);
-        return blurb;
+      if (!best.description && isGenuine(blurb)) {
+        best.description = blurb;
+        console.log(`[Web Book Scraper] Found synopsis for "${title}" via ${host}`);
       }
+
+      // Stop early once we have everything we look for.
+      if (best.description && best.publisher && best.author && best.publishedYear !== undefined) break;
     }
+    if (best.publisher || best.author || best.publishedYear !== undefined) {
+      console.log(`[Web Book Scraper] Metadata for "${title}": publisher="${best.publisher}" year=${best.publishedYear ?? '-'} author="${best.author}"`);
+    }
+    return best;
   } catch (err) {
-    console.warn('[Web Synopsis Scraper] lookup failed:', err instanceof Error ? err.message : err);
+    console.warn('[Web Book Scraper] lookup failed:', err instanceof Error ? err.message : err);
   }
-  return '';
+  return { description: '', publisher: '', author: '' };
 }
 
 async function startServer() {
@@ -1337,14 +1392,26 @@ async function startServer() {
     // synopsis from a consumer book site (keyless — works without the Gemini key).
     // A found synopsis is treated exactly like a WorldCat/Google Books one, so both
     // the AI and the offline-heuristic paths below return it verbatim.
-    const rd = retrievedData as { description?: string; [k: string]: any };
+    const rd = retrievedData as { description?: string; publisher?: string; publishedYear?: number; author?: string; [k: string]: any };
     const rdDesc = (rd.description || '').trim();
     const rdIsPlaceholder =
       rdDesc.length < 15 ||
       rdDesc === 'No synopsis/abstract available in public bibliographic databases.';
-    if (rdIsPlaceholder) {
-      const scraped = await scrapeWebSynopsis(title, retrievedData.author || author, isbn);
-      if (scraped) rd.description = scraped;
+    // Web-search fallback: run it when the structured databases (Z39.50/LOC,
+    // Google Books, Open Library) left the synopsis OR any core bibliographic
+    // field empty, and merge whatever the web yields without overwriting good data.
+    const rdMissingMeta = !rd.publisher || !rd.publishedYear || !rd.author;
+    // `webSourced` carries ONLY genuine web-scraped fields, kept separate so the
+    // client can fill missing catalogue fields without ever picking up a
+    // fabricated heuristic value (e.g. a default "Zera Academic Press" publisher).
+    let webSourced: { publisher: string; publishedYear?: number; author: string } = { publisher: '', author: '' };
+    if (rdIsPlaceholder || rdMissingMeta) {
+      const web = await scrapeWebBookData(title, retrievedData.author || author, isbn);
+      webSourced = { publisher: web.publisher, publishedYear: web.publishedYear, author: web.author };
+      if (rdIsPlaceholder && web.description) rd.description = web.description;
+      if (!rd.publisher && web.publisher) rd.publisher = web.publisher;
+      if (!rd.author && web.author) rd.author = web.author;
+      if (!rd.publishedYear && web.publishedYear !== undefined) rd.publishedYear = web.publishedYear;
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -1361,7 +1428,7 @@ async function startServer() {
     if (isMockKey) {
       console.log(`[Scholastic API Core] Active API key is unconfigured or a mock/placeholder. Running advanced offline scholastic heuristic modeling engine for book: "${title}"`);
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
-      return res.json({ ...heuristicResult, lexileLevel });
+      return res.json({ ...heuristicResult, lexileLevel, webSourced });
     }
 
     try {
@@ -1467,11 +1534,11 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
         parsed.description = "No synopsis/abstract available in public bibliographic databases.";
       }
 
-      res.json({ ...parsed, lexileLevel });
+      res.json({ ...parsed, lexileLevel, webSourced });
     } catch (err: any) {
       console.log("[Scholastic API Core] Gemini API execution bypassed. Utilizing advanced offline scholastic heuristic modeling engine.");
       const heuristicResult = generateHeuristicScholasticMetadata(title, author, isbn, description, retrievedData);
-      res.json({ ...heuristicResult, lexileLevel });
+      res.json({ ...heuristicResult, lexileLevel, webSourced });
     }
   });
 

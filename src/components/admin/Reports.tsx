@@ -37,6 +37,37 @@ import {
 import { Book, UserProfile, Loan } from '@/src/types';
 import { handleFirestoreError, OperationType } from '@/src/hooks/useAuth';
 
+// Returns a book's Lexile: the measured value if present, otherwise an ESTIMATED
+// range inferred from grade-band signals in the title/category/series, so no book
+// is left as "Not measured" in the reading-level report.
+const lexileFor = (book: any): string => {
+  const measured = String(book.lexileLevel || '').trim();
+  if (measured && !/not measured/i.test(measured)) return measured;
+
+  const hay = `${book.title || ''} ${book.category || ''} ${book.series || ''}`.toLowerCase();
+  const has = (...words: string[]) => words.some(w => hay.includes(w));
+
+  // Upper / senior secondary
+  if (has('a-level', 'a level', 'gcse', 'igcse', 'ks4', 'key stage 4', 'key stage four', 'upper secondary',
+          'senior', 'form 4', 'form 5', 'grade 10', 'grade 11', 'grade 12', 'year 10', 'year 11', 'year 12'))
+    return '850L–1100L (est.)';
+  // Lower / middle secondary
+  if (has('secondary', 'lower secondary', 'ks3', 'key stage 3', 'key stage three', 'middle',
+          'grade 7', 'grade 8', 'grade 9', 'year 7', 'year 8', 'year 9', 'form 1', 'form 2', 'form 3'))
+    return '600L–900L (est.)';
+  // Early years / beginner readers
+  if (has('kids', 'early', 'beginner', 'foundation', 'kindergarten', 'preschool', 'pre-school',
+          'phonics', 'picture book', 'starter', 'reception'))
+    return '200L–500L (est.)';
+  // Primary / elementary
+  if (has('primary', 'elementary', 'ks1', 'ks2', 'key stage 1', 'key stage 2', 'junior',
+          'grade 1', 'grade 2', 'grade 3', 'grade 4', 'grade 5', 'grade 6',
+          'year 1', 'year 2', 'year 3', 'year 4', 'year 5', 'year 6'))
+    return '400L–800L (est.)';
+  // Unknown → broad school-age band
+  return '300L–1000L (est.)';
+};
+
 interface PreviewModalProps {
   title: string;
   data: any[];
@@ -136,6 +167,26 @@ const PreviewModal: React.FC<PreviewModalProps> = ({ title, data, columns, onClo
     }
   };
 
+  // Export the currently shown records (respecting the search filter) as a CSV
+  // file the librarian can open in Excel / Google Sheets.
+  const downloadCsv = () => {
+    const esc = (v: any) => `"${(v === undefined || v === null ? '' : String(v)).replace(/"/g, '""')}"`;
+    const header = columns.map(c => esc(c.label)).join(',');
+    const rows = filteredData.map(item => columns.map(c => esc(item[c.key])).join(','));
+    const csv = [header, ...rows].join('\r\n');
+    // Leading BOM so Excel reads UTF-8 (accented names, etc.) correctly.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.download = `${title.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}_${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-5xl max-h-[90vh] rounded-[40px] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
@@ -154,6 +205,14 @@ const PreviewModal: React.FC<PreviewModalProps> = ({ title, data, columns, onClo
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
              </div>
+             <button
+               onClick={downloadCsv}
+               disabled={filteredData.length === 0}
+               className="flex items-center gap-2 px-4 py-2 bg-zera-emerald text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zera-emerald-dark transition-colors disabled:opacity-40"
+               title="Download this report as a CSV file"
+             >
+               <Download className="w-4 h-4" /> Download CSV
+             </button>
              <button onClick={onClose} className="p-2 hover:bg-natural-border rounded-full transition-colors">
                <X className="w-6 h-6 text-natural-text" />
              </button>
@@ -438,6 +497,34 @@ export const Reports: React.FC = () => {
         });
       }
     },
+    {
+      title: 'Reading Level (Lexile)',
+      icon: TrendingUp,
+      desc: 'Catalogue with each book\'s Lexile measure (or an estimated range), category, and stock. Downloadable as CSV.',
+      color: 'purple',
+      action: async () => {
+        const snap = await getDocs(collection(db, 'books'));
+        const rows = snap.docs
+          .map(d => ({ id: d.id, ...(d.data() as any) }))
+          .filter(b => b.status !== 'archived')
+          .map(b => ({ ...b, lexileLevel: lexileFor(b) }));
+        setPreview({
+          title: 'Reading Level (Lexile) Report',
+          data: rows,
+          columns: [
+            { key: 'title', label: 'Book Title' },
+            { key: 'author', label: 'Author' },
+            { key: 'isbn', label: 'ISBN' },
+            { key: 'barcode', label: 'Accession No.' },
+            { key: 'category', label: 'Category' },
+            { key: 'lexileLevel', label: 'Lexile Level' },
+            { key: 'availableCopies', label: 'Available' },
+            { key: 'totalCopies', label: 'Total Copies' },
+          ],
+          type: 'books'
+        });
+      }
+    },
   ];
 
   return (
@@ -477,6 +564,7 @@ export const Reports: React.FC = () => {
               report.color === 'emerald' ? 'bg-zera-emerald/10 text-zera-emerald' :
               report.color === 'blue' ? 'bg-blue-50 text-blue-600' :
               report.color === 'orange' ? 'bg-amber-50 text-amber-600' :
+              report.color === 'purple' ? 'bg-purple-50 text-purple-600' :
               report.color === 'red' ? 'bg-red-50 text-red-600' : 'bg-indigo-50 text-indigo-600'
             )}>
               <report.icon className="w-6 h-6" />

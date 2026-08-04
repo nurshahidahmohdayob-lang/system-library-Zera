@@ -23,7 +23,7 @@ import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
 import { cn } from '@/src/lib/utils';
-import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
+import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchWebEnrichment, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 
@@ -121,18 +121,24 @@ export const CatalogManager = () => {
     return () => clearTimeout(t);
   }, [books, highlightBookId]);
 
-  // Make sure a looked-up draft carries a genuine web synopsis and a Lexile
-  // measure before it reaches the form, so the librarian sees (and can tweak)
-  // the real values.
+  // Make sure a looked-up draft carries a genuine web synopsis, publisher/year/
+  // author (web search), and a Lexile measure before it reaches the form, so the
+  // librarian sees (and can tweak) the real values. Web-sourced fields only fill
+  // gaps — they never overwrite data the structured lookup or librarian provided.
   const withWebSynopsis = async (draft: Partial<Book>): Promise<Partial<Book>> => {
-    const [synopsis, lexile, cover] = await Promise.all([
-      isRealSynopsis(draft.description) ? Promise.resolve('') : fetchSynopsisFromWeb(draft),
+    const needsEnrich = !isRealSynopsis(draft.description) || !draft.publisher || !draft.publishedYear || !draft.author;
+    const emptyEnrich = { description: '', publisher: '', author: '', publishedYear: undefined as number | undefined };
+    const [enrich, lexile, cover] = await Promise.all([
+      needsEnrich ? fetchWebEnrichment(draft) : Promise.resolve(emptyEnrich),
       draft.lexileLevel ? Promise.resolve('') : fetchLexileFromWeb(draft),
       isRealCover(draft.coverUrl) ? Promise.resolve('') : fetchCoverFromWeb(draft)
     ]);
     return {
       ...draft,
-      ...(synopsis ? { description: synopsis } : {}),
+      ...(!isRealSynopsis(draft.description) && enrich.description ? { description: enrich.description } : {}),
+      ...(!draft.publisher && enrich.publisher ? { publisher: enrich.publisher } : {}),
+      ...(!draft.author && enrich.author ? { author: enrich.author } : {}),
+      ...(!draft.publishedYear && enrich.publishedYear ? { publishedYear: enrich.publishedYear } : {}),
       ...(lexile ? { lexileLevel: lexile } : {}),
       ...(cover ? { coverUrl: cover } : {})
     };
