@@ -3,7 +3,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
 import { Search, Book as BookIcon, BookOpen, X, Calendar, Barcode, Hash, Copy, Clock, Bookmark, BookmarkCheck, Globe, LayoutGrid, List, Sparkles, Loader2, Check, ChevronLeft, ChevronRight } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn, clean } from '@/src/lib/utils';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useUserHolds } from '@/src/hooks/useHolds';
@@ -313,7 +313,7 @@ export const BookGrid = () => {
                         {book.category}
                       </span>
                     </div>
-                    <p className="text-xs font-bold text-natural-muted mt-1">By {book.author} {book.publisher && `• Publisher: ${book.publisher}`}</p>
+                    <p className="text-xs font-bold text-natural-muted mt-1">By {clean(book.author) || 'Unknown'} {clean(book.publisher) && `• Publisher: ${clean(book.publisher)}`}</p>
                   </div>
 
                   <div className="text-xs text-natural-text font-serif leading-relaxed line-clamp-3 bg-natural-bg/45 p-3 rounded-xl border border-natural-border/30">
@@ -441,7 +441,7 @@ export const BookGrid = () => {
                     </div>
                     <div>
                       <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">ISBN / Accession No.</p>
-                      <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBook.isbn} {selectedBook.barcode && ` / ${selectedBook.barcode}`}</p>
+                      <p className="font-mono text-sm font-bold text-zera-emerald">{clean(selectedBook.isbn) || '—'} {clean(selectedBook.barcode) && ` / ${clean(selectedBook.barcode)}`}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -450,7 +450,7 @@ export const BookGrid = () => {
                     </div>
                     <div>
                       <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Classification</p>
-                      <p className="text-sm font-bold text-zera-emerald">{selectedBook.series ? `${selectedBook.series} (${selectedBook.category})` : selectedBook.category}</p>
+                      <p className="text-sm font-bold text-zera-emerald">{clean(selectedBook.series) ? `${clean(selectedBook.series)} (${clean(selectedBook.category)})` : (clean(selectedBook.category) || '—')}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -459,7 +459,7 @@ export const BookGrid = () => {
                     </div>
                     <div>
                       <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Publication</p>
-                      <p className="text-sm font-bold text-zera-emerald">{selectedBook.publisher} {selectedBook.publishedYear && `(${selectedBook.publishedYear})`}</p>
+                      <p className="text-sm font-bold text-zera-emerald">{clean(selectedBook.publisher) || '—'} {selectedBook.publishedYear && `(${selectedBook.publishedYear})`}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -468,7 +468,7 @@ export const BookGrid = () => {
                     </div>
                     <div>
                       <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Language & Spec</p>
-                      <p className="text-sm font-bold text-zera-emerald">{selectedBook.language} • {selectedBook.pageCount ? `${selectedBook.pageCount}pp` : ''}</p>
+                      <p className="text-sm font-bold text-zera-emerald">{clean(selectedBook.language) || '—'} {selectedBook.pageCount ? `• ${selectedBook.pageCount}pp` : ''}</p>
                     </div>
                   </div>
                   {selectedBook.lexileLevel && (

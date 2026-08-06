@@ -40,6 +40,7 @@ export interface Book {
   totalCopies: number;
   availableCopies: number;
   subjects?: string[];
+  assignedTeacher?: string; // teacher this book is keyed in under / held by
   createdAt?: string;
   updatedAt: string;
   status?: string;

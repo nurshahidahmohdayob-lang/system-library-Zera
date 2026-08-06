@@ -14,7 +14,7 @@ import {
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { Book } from '@/src/types';
-import { cn } from '@/src/lib/utils';
+import { cn, clean } from '@/src/lib/utils';
 
 // SheetJS (~500KB) is only loaded when the user actually uploads a workbook.
 let xlsxPromise: Promise<typeof import('xlsx')> | null = null;
@@ -236,7 +236,7 @@ export const CatalogReconcile = () => {
   };
 
   const downloadCsv = (rows: Record<string, any>[], cols: { key: string; label: string }[], filename: string) => {
-    const esc = (v: any) => `"${(v === undefined || v === null ? '' : String(v)).replace(/"/g, '""')}"`;
+    const esc = (v: any) => `"${clean(v).replace(/"/g, '""')}"`;
     const csv = [
       cols.map(c => esc(c.label)).join(','),
       ...rows.map(r => cols.map(c => esc(r[c.key])).join(',')),
@@ -411,7 +411,7 @@ export const CatalogReconcile = () => {
                   {(view === 'extra' ? result.extraInSystem : result.missingFromSystem).map((row: any, idx) => (
                     <tr key={idx} className="hover:bg-natural-bg/50">
                       {(view === 'extra' ? extraCols : missingCols).map(c => (
-                        <td key={c.key} className="px-4 py-3 text-sm font-medium text-natural-text">{row[c.key] || '—'}</td>
+                        <td key={c.key} className="px-4 py-3 text-sm font-medium text-natural-text">{clean(row[c.key]) || '—'}</td>
                       ))}
                     </tr>
                   ))}

@@ -16,16 +16,30 @@ import {
   UploadCloud,
   Layers,
   Copy,
-  CheckCircle2
+  CheckCircle2,
+  CalendarPlus
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book } from '@/src/types';
-import { cn } from '@/src/lib/utils';
+import { cn, clean } from '@/src/lib/utils';
 import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchWebEnrichment, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+
+// The date a book was keyed into the system (its createdAt). Handles the ISO
+// string we store, and defensively a Firestore Timestamp, formatted like
+// "23 Jul 2026". Returns '' when there's no usable date.
+const formatDateAdded = (v: any): string => {
+  if (!v) return '';
+  let d: Date;
+  if (typeof v === 'string' || typeof v === 'number') d = new Date(v);
+  else if (typeof v?.toDate === 'function') { try { d = v.toDate(); } catch { return ''; } }
+  else if (typeof v?.seconds === 'number') d = new Date(v.seconds * 1000);
+  else return '';
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
 
 export const CatalogManager = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -75,8 +89,25 @@ export const CatalogManager = () => {
     lexileLevel: '',
     totalCopies: 1,
     availableCopies: 1,
-    coverUrl: ''
+    coverUrl: '',
+    assignedTeacher: ''
   });
+
+  // Teacher names for the "Assigned Teacher" picker (books kept under a teacher).
+  const [teacherNames, setTeacherNames] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'teacher')));
+        const names = snap.docs
+          .map(d => (d.data() as any).name)
+          .filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
+        setTeacherNames(Array.from(new Set(names)).sort((a, b) => a.localeCompare(b)));
+      } catch (err) {
+        console.warn('Could not load teacher names for the assignment picker:', err);
+      }
+    })();
+  }, []);
 
 
 
@@ -241,11 +272,11 @@ export const CatalogManager = () => {
       
       // Close modal and clear data ONLY after successful save
       setIsAdding(false);
-      setNewBook({ 
+      setNewBook({
         title: '', author: '', series: '', isbn: '', barcode: '', category: 'Fiction',
         description: '', publisher: '', publishedYear: new Date().getFullYear(),
         language: 'English', pageCount: 0, dimensions: '', lexileLevel: '',
-        totalCopies: 1, availableCopies: 1, coverUrl: ''
+        totalCopies: 1, availableCopies: 1, coverUrl: '', assignedTeacher: ''
       });
     } catch (error) {
       console.error("Catalog Save Error:", error);
@@ -272,7 +303,10 @@ export const CatalogManager = () => {
       lexileLevel: book.lexileLevel || '',
       totalCopies: book.totalCopies,
       availableCopies: book.availableCopies,
-      coverUrl: book.coverUrl
+      coverUrl: book.coverUrl,
+      // Preload the assigned teacher — WITHOUT this, editing & saving a book
+      // would overwrite the stored teacher with a blank and lose the tracking.
+      assignedTeacher: book.assignedTeacher || ''
     });
     setIsAdding(true);
   };
@@ -500,7 +534,7 @@ export const CatalogManager = () => {
         // Note: barcode is intentionally NOT in the haystack — it is only matched
         // exactly, via the accession branch above.
         const haystack = [
-          b.title, b.author, b.isbn, b.category, b.publisher,
+          b.title, b.author, b.isbn, b.category, b.publisher, b.assignedTeacher,
           ...(b.subjects || []),
         ].filter(Boolean).join(' ').toLowerCase();
         // Every whitespace-separated term must appear (AND search).
@@ -730,11 +764,23 @@ export const CatalogManager = () => {
             <div className="grid grid-cols-2 gap-4">
                <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Sub-Series (Internal)</label>
-                <input 
+                <input
                   placeholder="Edition or Volume Info"
-                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text" 
+                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text"
                   value={newBook.series} onChange={e => setNewBook({...newBook, series: e.target.value})}
                 />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Assigned Teacher <span className="text-natural-muted/60 normal-case tracking-normal">(kept under)</span></label>
+                <input
+                  list="catalog-teacher-list"
+                  placeholder="Type or pick a teacher name"
+                  className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text"
+                  value={newBook.assignedTeacher || ''} onChange={e => setNewBook({...newBook, assignedTeacher: e.target.value})}
+                />
+                <datalist id="catalog-teacher-list">
+                  {teacherNames.map(n => <option key={n} value={n} />)}
+                </datalist>
               </div>
             </div>
 
@@ -1162,7 +1208,7 @@ export const CatalogManager = () => {
                   </div>
                   <div>
                     <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Accession No.</p>
-                    <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBookForView.barcode || 'NO-ACCESSION-NO'}</p>
+                    <p className="font-mono text-sm font-bold text-zera-emerald">{clean(selectedBookForView.barcode) || 'NO-ACCESSION-NO'}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
@@ -1171,7 +1217,7 @@ export const CatalogManager = () => {
                   </div>
                   <div>
                     <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">ISBN (Standard ID)</p>
-                    <p className="font-mono text-sm font-bold text-zera-emerald">{selectedBookForView.isbn}</p>
+                    <p className="font-mono text-sm font-bold text-zera-emerald">{clean(selectedBookForView.isbn) || '—'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1180,7 +1226,7 @@ export const CatalogManager = () => {
                   </div>
                   <div>
                     <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Publication</p>
-                    <p className="text-sm font-bold text-zera-emerald">{selectedBookForView.publisher} {selectedBookForView.publishedYear && `(${selectedBookForView.publishedYear})`}</p>
+                    <p className="text-sm font-bold text-zera-emerald">{clean(selectedBookForView.publisher) || '—'} {selectedBookForView.publishedYear && `(${selectedBookForView.publishedYear})`}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1189,7 +1235,7 @@ export const CatalogManager = () => {
                   </div>
                   <div>
                     <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Physical Spec</p>
-                    <p className="text-sm font-bold text-zera-emerald">{selectedBookForView.pageCount ? `${selectedBookForView.pageCount}pp` : ''} {selectedBookForView.dimensions} {selectedBookForView.language}</p>
+                    <p className="text-sm font-bold text-zera-emerald">{[selectedBookForView.pageCount ? `${selectedBookForView.pageCount}pp` : '', clean(selectedBookForView.dimensions), clean(selectedBookForView.language)].filter(Boolean).join(' ') || '—'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1198,7 +1244,25 @@ export const CatalogManager = () => {
                   </div>
                   <div>
                     <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Lexile Reading Level</p>
-                    <p className="text-sm font-bold text-zera-emerald font-mono">{selectedBookForView.lexileLevel || 'Not measured'}</p>
+                    <p className="text-sm font-bold text-zera-emerald font-mono">{clean(selectedBookForView.lexileLevel) || 'Not measured'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald">
+                    <CalendarPlus className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Date Catalogued</p>
+                    <p className="text-sm font-bold text-zera-emerald">{formatDateAdded(selectedBookForView.createdAt) || 'Not recorded'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald">
+                    <BookIcon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-natural-muted/60 mb-0.5">Assigned Teacher</p>
+                    <p className="text-sm font-bold text-zera-emerald">{clean(selectedBookForView.assignedTeacher) || 'Not assigned'}</p>
                   </div>
                 </div>
               </div>

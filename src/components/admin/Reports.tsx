@@ -20,7 +20,7 @@ import {
   RefreshCcw,
   AlertTriangle
 } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn, clean } from '@/src/lib/utils';
 import { db } from '@/src/lib/firebase';
 import { 
   collection, 
@@ -170,7 +170,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({ title, data, columns, onClo
   // Export the currently shown records (respecting the search filter) as a CSV
   // file the librarian can open in Excel / Google Sheets.
   const downloadCsv = () => {
-    const esc = (v: any) => `"${(v === undefined || v === null ? '' : String(v)).replace(/"/g, '""')}"`;
+    const esc = (v: any) => `"${clean(v).replace(/"/g, '""')}"`;
     const header = columns.map(c => esc(c.label)).join(',');
     const rows = filteredData.map(item => columns.map(c => esc(item[c.key])).join(','));
     const csv = [header, ...rows].join('\r\n');
@@ -243,7 +243,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({ title, data, columns, onClo
                             onChange={(e) => handleEditChange(col.key, e.target.value)}
                           />
                         ) : (
-                          item[col.key] || '-'
+                          clean(item[col.key]) || '-'
                         )}
                       </td>
                     ))}

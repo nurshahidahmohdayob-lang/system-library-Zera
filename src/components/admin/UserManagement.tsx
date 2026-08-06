@@ -36,7 +36,7 @@ import {
   Barcode as BarcodeIcon,
   Sparkles
 } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn, clean } from '@/src/lib/utils';
 import { format } from 'date-fns';
 import { BarcodeService, BarcodeType } from '@/src/services/BarcodeService';
 import { StudentSync } from '@/src/components/admin/StudentSync';
@@ -45,6 +45,16 @@ import { StaffSync } from '@/src/components/admin/StaffSync';
 interface UserManagementProps {
   roleFilter?: 'student' | 'teacher';
 }
+
+// Format a loan date (stored as ISO string; guarded for Firestore Timestamp)
+// into "Aug 6, 2026". Returns '' for missing/invalid dates.
+const fmtLoanDate = (v: any): string => {
+  if (!v) return '';
+  const d = (typeof v === 'string' || typeof v === 'number')
+    ? new Date(v)
+    : (typeof v?.toDate === 'function' ? v.toDate() : (typeof v?.seconds === 'number' ? new Date(v.seconds * 1000) : null));
+  return d && !isNaN(d.getTime()) ? format(d, 'MMM d, yyyy') : '';
+};
 
 enum OperationType {
   CREATE = 'create',
@@ -509,7 +519,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                   </div>
                   <div className="flex items-center gap-3">
                     <Phone className="w-4 h-4 text-natural-muted" />
-                    <span className="text-sm font-bold text-natural-text">{selectedUser.phoneNumber || 'N/A'}</span>
+                    <span className="text-sm font-bold text-natural-text">{clean(selectedUser.phoneNumber) || 'N/A'}</span>
                   </div>
                   {selectedUser.grade && (
                     <div className="flex items-center gap-3">
@@ -568,9 +578,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
 
              <div className="lg:w-2/3 space-y-6">
                 <div className="flex items-center justify-between px-2">
-                  <h4 className="text-lg font-black text-natural-text uppercase tracking-tight">Active Borrowings</h4>
+                  <h4 className="text-lg font-black text-natural-text uppercase tracking-tight">Borrowing History</h4>
                   <div className="flex items-center gap-2 bg-zera-emerald/10 px-3 py-1 rounded-full text-[10px] font-black text-zera-emerald uppercase tracking-widest border border-zera-emerald/20">
-                    <BookOpen className="w-3.5 h-3.5" /> {userLoans.filter(l => l.status === 'active').length} Books
+                    <BookOpen className="w-3.5 h-3.5" /> {userLoans.filter(l => l.status === 'active').length} out · {userLoans.length} total
                   </div>
                 </div>
 
@@ -592,7 +602,10 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                           <div>
                             <p className="text-sm font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight underline decoration-transparent group-hover:decoration-zera-emerald/40 underline-offset-2">{loan.bookTitle}</p>
                             <p className="text-[10px] font-bold text-natural-muted uppercase mt-0.5">
-                              Due: {format(new Date(loan.dueDate), 'MMM d, yyyy')}
+                              Borrowed: {fmtLoanDate(loan.checkoutDate) || '—'}
+                              {loan.status === 'returned'
+                                ? <> · Returned: {fmtLoanDate(loan.returnDate) || '—'}</>
+                                : <> · Due: {fmtLoanDate(loan.dueDate) || '—'}</>}
                             </p>
                           </div>
                        </div>
@@ -765,11 +778,11 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
               <div className="grid grid-cols-2 gap-3 mb-6">
                 <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
                   <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">ISBN</p>
-                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{viewBook.isbn || '—'}</p>
+                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{clean(viewBook.isbn) || '—'}</p>
                 </div>
                 <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
                   <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Accession No.</p>
-                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{viewBook.barcode || '—'}</p>
+                  <p className="font-mono text-sm font-bold text-zera-emerald break-all">{clean(viewBook.barcode) || '—'}</p>
                 </div>
                 <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
                   <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Availability</p>
@@ -778,7 +791,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                 {viewBook.publisher && (
                   <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
                     <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">Publisher</p>
-                    <p className="text-sm font-bold text-natural-text">{viewBook.publisher}{viewBook.publishedYear ? ` (${viewBook.publishedYear})` : ''}</p>
+                    <p className="text-sm font-bold text-natural-text">{clean(viewBook.publisher) || '—'}{viewBook.publishedYear ? ` (${viewBook.publishedYear})` : ''}</p>
                   </div>
                 )}
               </div>
