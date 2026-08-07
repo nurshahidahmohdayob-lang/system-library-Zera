@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import 'dotenv/config';
 import { registerSsoRoutes } from './src/server/sso/routes';
 
@@ -619,9 +618,12 @@ async function scrapeWebBookData(title: string, author?: string, isbn?: string):
   return { description: '', publisher: '', author: '' };
 }
 
-async function startServer() {
+// Builds the Express app with every API/SSO route wired up, but WITHOUT the Vite
+// middleware, static file serving, or listen() — so it can be reused both by the
+// local standalone server (startServer) and by the Vercel serverless entrypoint
+// (api/index.ts), where hosting serves the static client and calls this handler.
+export async function createApiApp() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3003;
 
   // Middleware to enable CORS and parse JSON
   app.use(express.json());
@@ -1898,8 +1900,18 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
     }
   });
 
+  return app;
+}
+
+async function startServer() {
+  const app = await createApiApp();
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3003;
+
   // Vite middleware for assets compile and page serving matching correct sandbox env
   if (process.env.NODE_ENV !== 'production') {
+    // Loaded lazily so the Vercel serverless bundle (which imports server.ts for
+    // its API routes only) never has to include Vite.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1918,4 +1930,8 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
   });
 }
 
-startServer();
+// Only start a listening server for local/standalone runs. On Vercel the app is
+// consumed as a serverless function (api/index.ts) and must NOT call listen().
+if (!process.env.VERCEL) {
+  startServer();
+}
