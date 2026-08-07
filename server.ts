@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import 'dotenv/config';
-import { registerSsoRoutes } from './src/server/sso/routes.js';
 
 const AP_STUDENTS = [
   {
@@ -638,8 +637,17 @@ export async function createApiApp() {
   });
 
   // Commun Connected-Systems SSO (browser handoff + one-time custom-token exchange).
-  // Registered before the API routes and the Vite/static SPA catch-all.
-  registerSsoRoutes(app);
+  // Registered before the API routes and the Vite/static SPA catch-all — but only
+  // when SSO is actually configured. The SSO module graph pulls in firebase-admin
+  // (and its jwks-rsa/jose chain), so importing it lazily & conditionally keeps it
+  // off the cold-start path of environments that don't use SSO (e.g. Vercel), where
+  // it can't function anyway without COMMUN_* credentials.
+  const ssoConfigured = !!(process.env.COMMUN_ISSUER || process.env.COMMUN_SUBDOMAIN);
+  const devSsoEnabled = process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_SSO === 'true';
+  if (ssoConfigured || devSsoEnabled) {
+    const { registerSsoRoutes } = await import('./src/server/sso/routes.js');
+    registerSsoRoutes(app);
+  }
 
   // AI-Powered Book Synopsis & Details Enrichment endpoint using Google GenAI SDK (gemini-3.5-flash)
   // Lexile reading-level lookup via the free MetaMetrics "Find a Book" search
