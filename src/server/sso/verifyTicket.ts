@@ -4,7 +4,7 @@
  * `jti` single-use is enforced separately by the caller (jtiStore).
  */
 import { jwtVerify, createRemoteJWKSet, type JWTPayload } from 'jose';
-import type { SsoConfig } from './config';
+import type { SsoConfig } from './config.js';
 
 export interface CommunName {
   first_name?: string;

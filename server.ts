@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import 'dotenv/config';
-import { registerSsoRoutes } from './src/server/sso/routes';
+import { registerSsoRoutes } from './src/server/sso/routes.js';
 
 const AP_STUDENTS = [
   {

@@ -3,7 +3,7 @@
 // reuse the exact same Express app the local server builds, so /api/v1/* and
 // /sso/* behave identically in production and in local dev.
 import type { IncomingMessage, ServerResponse } from 'http';
-import { createApiApp } from '../server';
+import { createApiApp } from '../server.js';
 
 // Build the app once per warm serverless instance and reuse across invocations.
 let appPromise: ReturnType<typeof createApiApp> | null = null;

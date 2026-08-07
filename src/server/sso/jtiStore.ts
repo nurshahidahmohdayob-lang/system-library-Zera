@@ -7,7 +7,7 @@
  * Admin SDK writes bypass security rules, so this collection needs no client rule.
  */
 import { Timestamp } from 'firebase-admin/firestore';
-import { getAdminDb } from './firebaseAdmin';
+import { getAdminDb } from './firebaseAdmin.js';
 
 /**
  * Atomically record a jti. Returns true if this is the first time we've seen it

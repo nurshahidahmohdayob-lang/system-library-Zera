@@ -9,9 +9,9 @@
  * - Admin SDK writes bypass security rules, so the profile doc is authoritative.
  */
 import { FieldValue } from 'firebase-admin/firestore';
-import { getAdminAuth, getAdminDb } from './firebaseAdmin';
-import type { CommunName, TicketClaims } from './verifyTicket';
-import type { Userinfo } from './communClient';
+import { getAdminAuth, getAdminDb } from './firebaseAdmin.js';
+import type { CommunName, TicketClaims } from './verifyTicket.js';
+import type { Userinfo } from './communClient.js';
 
 export type AppRole = 'student' | 'teacher';
 

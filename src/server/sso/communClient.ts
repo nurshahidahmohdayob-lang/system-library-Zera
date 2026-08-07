@@ -2,8 +2,8 @@
  * Back-channel reads against the Commun Vendor API using the machine token.
  * Used here for identity re-sync on each SSO login via GET /api/v1/userinfo/{sub}.
  */
-import type { SsoConfig } from './config';
-import type { CommunName } from './verifyTicket';
+import type { SsoConfig } from './config.js';
+import type { CommunName } from './verifyTicket.js';
 
 export interface Userinfo {
   sub: string;

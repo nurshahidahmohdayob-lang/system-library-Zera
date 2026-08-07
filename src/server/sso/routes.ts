@@ -10,12 +10,12 @@
  * rather than the URL, so it never lands in history, referrers, or server logs.
  */
 import type { Express, Request, Response } from 'express';
-import { getSsoConfig } from './config';
-import { verifyTicket, type TicketClaims } from './verifyTicket';
-import { consumeJti } from './jtiStore';
-import { getUserinfo, CommunRevokedError } from './communClient';
-import { provisionShadowUser, mapRole } from './provisionUser';
-import { getAdminAuth } from './firebaseAdmin';
+import { getSsoConfig } from './config.js';
+import { verifyTicket, type TicketClaims } from './verifyTicket.js';
+import { consumeJti } from './jtiStore.js';
+import { getUserinfo, CommunRevokedError } from './communClient.js';
+import { provisionShadowUser, mapRole } from './provisionUser.js';
+import { getAdminAuth } from './firebaseAdmin.js';
 
 const HANDOFF_COOKIE = 'zera_sso_handoff';
 const HANDOFF_PATH = '/api/v1/sso/exchange';
