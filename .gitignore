@@ -10,3 +10,4 @@ coverage/
 # Firebase Emulator Suite
 .emulator-data/
 .firebase/
+.vercel
