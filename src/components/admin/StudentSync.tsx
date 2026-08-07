@@ -441,7 +441,7 @@ export const StudentSync: React.FC = () => {
       
       let createdCount = 0;
       let updatedCount = 0;
-      let skippedCount = 0;
+      const skippedCount = 0;
       let failedCount = 0;
 
       addLog(`Reconciling Firestore library accounts & fetching detailed API records...`);
