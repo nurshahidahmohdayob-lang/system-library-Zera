@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from '@/src/hooks/useAuth';
 import { 
   Book as BookIcon, 
@@ -34,21 +34,32 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
 
+// BookGrid is the default OPAC landing view — keep it eager so the public
+// catalogue paints immediately. Every other view is code-split with lazy() so
+// its JavaScript only downloads when the section is first opened (then cached),
+// instead of everyone downloading the entire admin system up front.
 import { BookGrid } from '@/src/components/opac/BookGrid';
-import { MemberPortal } from '@/src/components/opac/MemberPortal';
-import { BrandCharter } from '@/src/components/opac/BrandCharter';
-import { CatalogManager } from '@/src/components/admin/CatalogManager';
-import { CatalogReconcile } from '@/src/components/admin/CatalogReconcile';
-import { UserManagement } from '@/src/components/admin/UserManagement';
-import { CirculationDashboard } from '@/src/components/admin/CirculationDashboard';
-import { AdminDashboard } from '@/src/components/admin/AdminDashboard';
-import { OnlineResources } from '@/src/components/admin/OnlineResources';
-import { Acquisition } from '@/src/components/admin/Acquisition';
-import { Reports } from '@/src/components/admin/Reports';
-import { InventoryAudit } from '@/src/components/admin/InventoryAudit';
-import { TeacherStocktake } from '@/src/components/admin/TeacherStocktake';
-import { BarcodeStudio } from '@/src/components/admin/BarcodeStudio';
-import { HoldRequests } from '@/src/components/admin/HoldRequests';
+const MemberPortal = lazy(() => import('@/src/components/opac/MemberPortal').then(m => ({ default: m.MemberPortal })));
+const BrandCharter = lazy(() => import('@/src/components/opac/BrandCharter').then(m => ({ default: m.BrandCharter })));
+const CatalogManager = lazy(() => import('@/src/components/admin/CatalogManager').then(m => ({ default: m.CatalogManager })));
+const CatalogReconcile = lazy(() => import('@/src/components/admin/CatalogReconcile').then(m => ({ default: m.CatalogReconcile })));
+const UserManagement = lazy(() => import('@/src/components/admin/UserManagement').then(m => ({ default: m.UserManagement })));
+const CirculationDashboard = lazy(() => import('@/src/components/admin/CirculationDashboard').then(m => ({ default: m.CirculationDashboard })));
+const AdminDashboard = lazy(() => import('@/src/components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const OnlineResources = lazy(() => import('@/src/components/admin/OnlineResources').then(m => ({ default: m.OnlineResources })));
+const Acquisition = lazy(() => import('@/src/components/admin/Acquisition').then(m => ({ default: m.Acquisition })));
+const Reports = lazy(() => import('@/src/components/admin/Reports').then(m => ({ default: m.Reports })));
+const InventoryAudit = lazy(() => import('@/src/components/admin/InventoryAudit').then(m => ({ default: m.InventoryAudit })));
+const TeacherStocktake = lazy(() => import('@/src/components/admin/TeacherStocktake').then(m => ({ default: m.TeacherStocktake })));
+const BarcodeStudio = lazy(() => import('@/src/components/admin/BarcodeStudio').then(m => ({ default: m.BarcodeStudio })));
+const HoldRequests = lazy(() => import('@/src/components/admin/HoldRequests').then(m => ({ default: m.HoldRequests })));
+
+// Shown while a code-split view's chunk downloads (usually a blink, then cached).
+const ViewLoader = () => (
+  <div className="flex items-center justify-center py-32">
+    <div className="w-8 h-8 rounded-full border-4 border-zera-emerald/20 border-t-zera-emerald animate-spin" />
+  </div>
+);
 import { usePendingHoldsCount } from '@/src/hooks/useHolds';
 import { Barcode as BarcodeIcon } from 'lucide-react';
 
@@ -558,10 +569,12 @@ const OPAC = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.3 }}
             >
-              {activeTab === 'books' && <BookGrid />}
-              {activeTab === 'resources' && <OnlineResources />}
-              {activeTab === 'charter' && <BrandCharter />}
-              {activeTab === 'portal' && <MemberPortal onOpenAuth={onOpenAuth} />}
+              <Suspense fallback={<ViewLoader />}>
+                {activeTab === 'books' && <BookGrid />}
+                {activeTab === 'resources' && <OnlineResources />}
+                {activeTab === 'charter' && <BrandCharter />}
+                {activeTab === 'portal' && <MemberPortal onOpenAuth={onOpenAuth} />}
+              </Suspense>
             </motion.div>
           </AnimatePresence>
         </div>
@@ -666,19 +679,21 @@ const AdminPanel = () => {
             exit={{ opacity: 0, x: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {activeTab === 'dashboard' && <AdminDashboard onNavigate={setActiveTab} />}
-            {activeTab === 'catalog' && <CatalogManager />}
-            {activeTab === 'reconcile' && <CatalogReconcile />}
-            {activeTab === 'circulation' && <CirculationDashboard />}
-            {activeTab === 'holds' && <HoldRequests />}
-            {activeTab === 'students' && <UserManagement key="students" roleFilter="student" />}
-            {activeTab === 'teachers' && <UserManagement key="teachers" roleFilter="teacher" />}
-            {activeTab === 'resources' && <OnlineResources />}
-            {activeTab === 'acquisition' && <Acquisition />}
-            {activeTab === 'reports' && <Reports />}
-            {activeTab === 'inventory' && <InventoryAudit />}
-            {activeTab === 'stocktake' && <TeacherStocktake />}
-            {activeTab === 'barcodes' && <BarcodeStudio />}
+            <Suspense fallback={<ViewLoader />}>
+              {activeTab === 'dashboard' && <AdminDashboard onNavigate={setActiveTab} />}
+              {activeTab === 'catalog' && <CatalogManager />}
+              {activeTab === 'reconcile' && <CatalogReconcile />}
+              {activeTab === 'circulation' && <CirculationDashboard />}
+              {activeTab === 'holds' && <HoldRequests />}
+              {activeTab === 'students' && <UserManagement key="students" roleFilter="student" />}
+              {activeTab === 'teachers' && <UserManagement key="teachers" roleFilter="teacher" />}
+              {activeTab === 'resources' && <OnlineResources />}
+              {activeTab === 'acquisition' && <Acquisition />}
+              {activeTab === 'reports' && <Reports />}
+              {activeTab === 'inventory' && <InventoryAudit />}
+              {activeTab === 'stocktake' && <TeacherStocktake />}
+              {activeTab === 'barcodes' && <BarcodeStudio />}
+            </Suspense>
           </motion.div>
         </AnimatePresence>
       </main>

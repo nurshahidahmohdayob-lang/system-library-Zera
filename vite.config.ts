@@ -15,6 +15,21 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Split the biggest shared vendors into their own long-lived chunks so
+          // they download in parallel and stay cached across deploys, instead of
+          // inflating the main app bundle.
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('firebase') || id.includes('@firebase') || id.includes('@grpc') || id.includes('protobufjs')) return 'firebase';
+              if (id.includes('framer-motion') || id.includes('/motion/')) return 'motion';
+            }
+          },
+        },
+      },
+    },
     server: {
       // Served behind the local Caddy HTTPS proxy as https://library.test, so the
       // dev server must accept that Host header (Vite 5+ blocks unknown hosts with a
