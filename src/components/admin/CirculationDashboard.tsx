@@ -14,11 +14,22 @@ import {
   Upload
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
-import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, QueryDocumentSnapshot } from 'firebase/firestore';
+import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, orderBy, QueryDocumentSnapshot } from 'firebase/firestore';
 import { Book as BookType, UserProfile, Loan } from '@/src/types';
 import { format, addDays } from 'date-fns';
 import { cn } from '@/src/lib/utils';
 import { BatchCirculationImporter } from './BatchCirculationImporter';
+
+// Loan dates may be ISO strings (new records), Firestore Timestamps, or {seconds}
+// shapes (older/imported records). Parse defensively so a stray value can't crash
+// the list render — return '' when it can't be understood.
+const safeDate = (v: any, fmt: string): string => {
+  if (!v) return '';
+  const d = (typeof v === 'string' || typeof v === 'number')
+    ? new Date(v)
+    : (typeof v?.toDate === 'function' ? v.toDate() : (typeof v?.seconds === 'number' ? new Date(v.seconds * 1000) : null));
+  return d && !isNaN(d.getTime()) ? format(d, fmt) : '';
+};
 
 export const CirculationDashboard = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -30,11 +41,13 @@ export const CirculationDashboard = () => {
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
-  // Running list of items issued to the currently-selected member during this
-  // session. Grows with every successful scan/checkout and resets when a
-  // different member is selected, so the librarian sees a live pile of what
-  // they've just handed over.
-  const [sessionIssues, setSessionIssues] = useState<{ bookTitle: string; barcode: string; at: string }[]>([]);
+  // The books currently on loan to the selected member, read LIVE from
+  // Firestore. Unlike an in-memory session list, this is never lost on reload
+  // or when switching members — it always reflects the real borrowing records
+  // stored under the member's name. It grows the instant a book is issued and
+  // shrinks when one is returned.
+  const [memberLoans, setMemberLoans] = useState<Loan[]>([]);
+  const [memberLoansLoading, setMemberLoansLoading] = useState(false);
   // Remembers the last scan we auto-issued, so an exact match + Enter key can't
   // both fire a checkout for the same scan.
   const lastScanRef = useRef('');
@@ -119,14 +132,52 @@ export const CirculationDashboard = () => {
     return () => clearTimeout(timer);
   }, [barcode, selectedUser]);
 
+  // Load the selected member's currently-borrowed (active) loans straight from
+  // Firestore. Re-run whenever the member changes so the panel always shows the
+  // true, persisted list of what's out under their name.
+  const loadMemberLoans = async (user: UserProfile | null) => {
+    if (!user) { setMemberLoans([]); return; }
+    setMemberLoansLoading(true);
+    try {
+      let docs;
+      try {
+        const snap = await getDocs(query(
+          collection(db, 'loans'),
+          where('userId', '==', user.uid),
+          where('status', '==', 'active'),
+          orderBy('checkoutDate', 'desc'),
+        ));
+        docs = snap.docs;
+      } catch {
+        // Fallback if the composite index isn't ready — sort in memory instead.
+        const snap = await getDocs(query(
+          collection(db, 'loans'),
+          where('userId', '==', user.uid),
+          where('status', '==', 'active'),
+        ));
+        docs = snap.docs;
+      }
+      const loans = docs
+        .map(d => ({ id: d.id, ...d.data() } as Loan))
+        .sort((a, b) => (b.checkoutDate || '').localeCompare(a.checkoutDate || ''));
+      setMemberLoans(loans);
+    } catch (err) {
+      console.error('Error loading member loans:', err);
+    } finally {
+      setMemberLoansLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMemberLoans(selectedUser);
+  }, [selectedUser]);
+
   const handleUserSearch = (val: string) => {
     setSearchTerm(val);
     if (val.length === 0) setSelectedUser(null);
   };
 
   const selectUser = (user: UserProfile) => {
-    // Switching to a different member starts a fresh session list.
-    if (user.uid !== selectedUser?.uid) setSessionIssues([]);
     setSelectedUser(user);
     setSearchTerm(user.name);
   };
@@ -189,13 +240,15 @@ export const CirculationDashboard = () => {
         return;
       }
 
-      await addDoc(collection(db, 'loans'), {
+      const checkoutDate = new Date().toISOString();
+      const dueDate = addDays(new Date(), 14).toISOString();
+      const loanRef = await addDoc(collection(db, 'loans'), {
         userId: selectedUser.uid,
         userName: selectedUser.name,
         bookId: bookDoc.id,
         bookTitle: bookData.title,
-        checkoutDate: new Date().toISOString(),
-        dueDate: addDays(new Date(), 14).toISOString(),
+        checkoutDate,
+        dueDate,
         status: 'active'
       });
 
@@ -203,10 +256,21 @@ export const CirculationDashboard = () => {
         availableCopies: bookData.availableCopies - 1
       });
 
-      setSessionIssues(prev => [
-        { bookTitle: bookData.title, barcode: bookData.barcode || bookData.isbn || barcode, at: new Date().toISOString() },
-        ...prev,
-      ]);
+      // Add the freshly-created loan to the live list immediately. It's already
+      // persisted in Firestore, so it will still be here on reload / re-select.
+      const newLoan: Loan = {
+        id: loanRef.id,
+        userId: selectedUser.uid,
+        userName: selectedUser.name,
+        copyId: '',
+        bookId: bookDoc.id,
+        bookTitle: bookData.title,
+        checkoutDate,
+        dueDate,
+        returnDate: null,
+        status: 'active',
+      };
+      setMemberLoans(prev => [newLoan, ...prev]);
       setStatus({ type: 'success', message: `${bookData.title} was successfully issued to ${selectedUser.name}.` });
 
       setBarcode('');
@@ -282,6 +346,12 @@ export const CirculationDashboard = () => {
       await updateDoc(doc(db, 'books', bookDoc.id), {
         availableCopies: (bookData.availableCopies || 0) + 1,
       });
+
+      // If the returned book was out to the member currently on screen, drop it
+      // from their live borrowed list so the panel stays accurate.
+      if (selectedUser && loan.userId === selectedUser.uid) {
+        setMemberLoans(prev => prev.filter(l => l.id !== loan.id));
+      }
 
       setSessionReturns(prev => [
         {
@@ -367,7 +437,6 @@ export const CirculationDashboard = () => {
                     onClick={() => {
                       setSelectedUser(null);
                       setSearchTerm('');
-                      setSessionIssues([]);
                     }}
                     className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 hover:bg-neutral-border rounded-full transition-colors z-10"
                     title="Clear Selection"
@@ -411,8 +480,8 @@ export const CirculationDashboard = () => {
                       </div>
                    </div>
                    <div className="text-right">
-                     <p className="text-2xl font-black text-zera-emerald">{selectedUser.activeLoansCount || 0}</p>
-                     <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest">Active Loans</p>
+                     <p className="text-2xl font-black text-zera-emerald">{memberLoansLoading ? '…' : memberLoans.length}</p>
+                     <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest">Books Out</p>
                    </div>
                 </div>
               </div>
@@ -492,43 +561,52 @@ export const CirculationDashboard = () => {
                </button>
             </div>
 
-            {selectedUser && sessionIssues.length > 0 && (
+            {selectedUser && (
               <div className="bg-natural-bg border border-natural-border rounded-3xl p-6 animate-in fade-in slide-in-from-top-2">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <span className="w-7 h-7 rounded-full bg-zera-emerald text-white flex items-center justify-center text-xs font-black">
-                      {sessionIssues.length}
+                      {memberLoansLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : memberLoans.length}
                     </span>
                     <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-natural-muted">
-                      Issued to {selectedUser.name.split(' ')[0]}
+                      Books out to {selectedUser.name.split(' ')[0]}
                     </h4>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setSessionIssues([])}
-                    className="text-[9px] font-black uppercase tracking-widest text-natural-muted hover:text-red-500 transition-colors flex items-center gap-1"
-                    title="Clear this session list"
+                    onClick={() => loadMemberLoans(selectedUser)}
+                    className="text-[9px] font-black uppercase tracking-widest text-natural-muted hover:text-zera-emerald transition-colors flex items-center gap-1"
+                    title="Refresh this list from the database"
                   >
-                    <Eraser className="w-3 h-3" /> Clear
+                    <Loader2 className={cn('w-3 h-3', memberLoansLoading && 'animate-spin')} /> Refresh
                   </button>
                 </div>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {sessionIssues.map((item, idx) => (
-                    <div
-                      key={`${item.barcode}-${item.at}-${idx}`}
-                      className="flex items-center gap-3 bg-white border border-natural-border rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-1"
-                    >
-                      <CheckCircle2 className="w-4 h-4 text-zera-emerald shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-natural-text truncate">{item.bookTitle}</p>
-                        <p className="text-[9px] font-black uppercase text-natural-muted tracking-widest truncate">
-                          {item.barcode} • {format(new Date(item.at), 'h:mm a')}
-                        </p>
+                {memberLoans.length > 0 ? (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {memberLoans.map((loan, idx) => (
+                      <div
+                        key={loan.id}
+                        className="flex items-center gap-3 bg-white border border-natural-border rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-1"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-zera-emerald shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-natural-text truncate">{loan.bookTitle}</p>
+                          <p className="text-[9px] font-black uppercase text-natural-muted tracking-widest truncate">
+                            {safeDate(loan.checkoutDate, 'd MMM yyyy') ? `Borrowed ${safeDate(loan.checkoutDate, 'd MMM yyyy')}` : 'Borrowed'}
+                            {safeDate(loan.dueDate, 'd MMM') ? ` • Due ${safeDate(loan.dueDate, 'd MMM')}` : ''}
+                          </p>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-widest text-natural-muted">#{memberLoans.length - idx}</span>
                       </div>
-                      <span className="text-[9px] font-black uppercase tracking-widest text-natural-muted">#{sessionIssues.length - idx}</span>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  !memberLoansLoading && (
+                    <p className="text-xs font-bold text-natural-muted italic px-1 py-2">
+                      No books currently out to {selectedUser.name.split(' ')[0]}.
+                    </p>
+                  )
+                )}
               </div>
             )}
           </div>
