@@ -125,27 +125,36 @@ export const HoldService = {
     const path = 'holds';
     try {
       // Block duplicate live requests for the same book by the same member.
-      const dupeQ = query(
-        collection(db, path),
-        where('userId', '==', user.uid),
-        where('bookId', '==', book.id),
-        where('status', 'in', ['pending', 'ready']),
-      );
-      const dupes = await getDocs(dupeQ);
-      if (!dupes.empty) return 'duplicate';
+      // Query by userId ONLY (a single-field index that always exists) and
+      // filter for the same book / active status in memory — the previous
+      // three-filter query needed a composite index that may not be deployed,
+      // which made every hold attempt fail.
+      const dupes = await getDocs(query(collection(db, path), where('userId', '==', user.uid)));
+      const hasActive = dupes.docs.some(d => {
+        const h = d.data();
+        return h.bookId === book.id && (h.status === 'pending' || h.status === 'ready');
+      });
+      if (hasActive) return 'duplicate';
 
-      await addDoc(collection(db, path), {
+      // Keep every field within the security-rule size limits, or the write is
+      // rejected. An over-long cover URL (e.g. a data: URI) exceeds the rule's
+      // 1000-char cap, so omit it rather than let it block the hold.
+      const clamp = (s: string, n: number) => (s || '').slice(0, n);
+      const cover = book.coverUrl ?? '';
+      const payload: Record<string, unknown> = {
         bookId: book.id,
-        bookTitle: book.title,
-        bookAuthor: book.author ?? '',
-        bookCoverUrl: book.coverUrl ?? '',
+        bookTitle: clamp(book.title, 200),
+        bookAuthor: clamp(book.author ?? '', 200),
         userId: user.uid,
-        userName: user.name,
-        userRole: user.role ?? '',
-        userEmail: user.email ?? '',
+        userName: clamp(user.name, 100),
+        userRole: clamp(user.role ?? '', 50),
+        userEmail: clamp(user.email ?? '', 100),
         status: 'pending',
         requestedAt: new Date().toISOString(),
-      });
+      };
+      if (cover && cover.length <= 1000) payload.bookCoverUrl = cover;
+
+      await addDoc(collection(db, path), payload);
       return 'created';
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
