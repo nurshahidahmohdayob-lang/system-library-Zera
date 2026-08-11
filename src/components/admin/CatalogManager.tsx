@@ -339,6 +339,10 @@ export const CatalogManager = () => {
     try {
       const now = new Date().toISOString();
       const newBarcode = await BarcodeService.generateNextBarcode('book');
+      // A record with totalCopies > 1 holds several physical copies under one
+      // accession; duplicating SPLITS one off (total unchanged). A single-copy
+      // record duplicates by ADDING a brand-new copy (total grows by one).
+      const isPooled = (book.totalCopies || 0) > 1;
       const sourceHasAvailable = (book.availableCopies || 0) > 0;
 
       const { id: _ignoredId, ...rest } = book;
@@ -346,26 +350,31 @@ export const CatalogManager = () => {
         ...rest,
         barcode: newBarcode,
         totalCopies: 1,
-        availableCopies: sourceHasAvailable ? 1 : 0,
+        availableCopies: isPooled ? (sourceHasAvailable ? 1 : 0) : 1,
         status: 'active',
         createdAt: now,
         updatedAt: now,
       });
       const newRef = await addDoc(collection(db, 'books'), copy);
 
-      // Peel one copy off the source.
-      const srcTotal = Math.max(1, (book.totalCopies || 1) - 1);
-      const srcAvail = sourceHasAvailable
-        ? Math.max(0, Math.min((book.availableCopies || 0) - 1, srcTotal))
-        : Math.min(book.availableCopies || 0, srcTotal);
-      await updateDoc(doc(db, 'books', book.id), {
-        totalCopies: srcTotal,
-        availableCopies: srcAvail,
-        updatedAt: now,
-      });
+      if (isPooled) {
+        // Peel one copy off the source so the physical total stays correct.
+        const srcTotal = Math.max(1, (book.totalCopies || 1) - 1);
+        const srcAvail = sourceHasAvailable
+          ? Math.max(0, Math.min((book.availableCopies || 0) - 1, srcTotal))
+          : Math.min(book.availableCopies || 0, srcTotal);
+        await updateDoc(doc(db, 'books', book.id), {
+          totalCopies: srcTotal,
+          availableCopies: srcAvail,
+          updatedAt: now,
+        });
+        setNotice(`Copy split from “${book.title}” — accession ${newBarcode}. ${srcTotal > 1 ? `${srcTotal} copies still share the original record.` : 'Each copy now has its own accession number.'}`);
+      } else {
+        // Add a brand-new additional copy; the source record is left untouched.
+        setNotice(`New copy of “${book.title}” created — accession ${newBarcode}.`);
+      }
 
-      // Confirm with a brief banner; the onSnapshot listener refreshes the list.
-      setNotice(`Copy created for “${book.title}” — accession ${newBarcode}. ${srcTotal > 1 ? `${srcTotal} copies still share the original record.` : 'Each copy now has its own accession number.'}`);
+      // The onSnapshot listener refreshes the list; highlight the new copy.
       setHighlightBookId(newRef.id);
     } catch (err) {
       console.error('Duplicate error:', err);
@@ -1187,19 +1196,17 @@ export const CatalogManager = () => {
                 </td>
                 <td className="px-8 py-5 text-right" onClick={(e) => e.stopPropagation()}>
                    <div className="flex gap-2 justify-end">
-                     {(book.totalCopies || 0) > 1 && (
-                       <button
-                         disabled={!!duplicatingId}
-                         onClick={(e) => handleDuplicate(book, e)}
-                         title="Duplicate a copy — creates a separate record with the same ISBN but a new accession number"
-                         className="p-3 hover:bg-zera-emerald/10 text-natural-muted hover:text-zera-emerald rounded-2xl transition-all border border-transparent hover:border-zera-emerald/20 shadow-sm hover:shadow-md disabled:opacity-50 flex items-center gap-2"
-                       >
-                          {duplicatingId === book.id
-                            ? <Loader2 className="w-4 h-4 animate-spin" />
-                            : <Copy className="w-4 h-4" />}
-                          <span className="text-[8px] font-black uppercase tracking-tighter hidden group-hover:inline">Copy</span>
-                       </button>
-                     )}
+                     <button
+                       disabled={!!duplicatingId}
+                       onClick={(e) => handleDuplicate(book, e)}
+                       title="Duplicate this book — creates a separate copy with the same ISBN but a new accession number"
+                       className="p-3 hover:bg-zera-emerald/10 text-natural-muted hover:text-zera-emerald rounded-2xl transition-all border border-transparent hover:border-zera-emerald/20 shadow-sm hover:shadow-md disabled:opacity-50 flex items-center gap-2"
+                     >
+                        {duplicatingId === book.id
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : <Copy className="w-4 h-4" />}
+                        <span className="text-[8px] font-black uppercase tracking-tighter hidden group-hover:inline">Copy</span>
+                     </button>
                      <button onClick={() => startEdit(book)} className="p-3 hover:bg-zera-yellow/10 text-natural-muted hover:text-zera-yellow-dark rounded-2xl transition-all border border-transparent hover:border-zera-yellow/20 shadow-sm hover:shadow-md">
                         <Edit2 className="w-4 h-4" />
                      </button>
@@ -1401,7 +1408,15 @@ export const CatalogManager = () => {
                   <Trash2 className="w-4 h-4" />
                   {confirmDeleteId === selectedBookForView.id ? 'Confirm?' : 'Remove'}
                 </button>
-                 <button 
+                 <button
+                  disabled={!!duplicatingId}
+                  onClick={(e) => handleDuplicate(selectedBookForView, e)}
+                  title="Create another copy of this book with a new accession number (same ISBN)"
+                  className="px-4 h-14 bg-zera-emerald/10 text-zera-emerald border-2 border-zera-emerald/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zera-emerald hover:text-white transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {duplicatingId === selectedBookForView.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />} Duplicate Copy
+                </button>
+                 <button
                   onClick={() => {
                     startEdit(selectedBookForView);
                     setSelectedBookForView(null);
