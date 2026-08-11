@@ -81,8 +81,16 @@ export const BookGrid = () => {
       setHoldMsg(res === 'duplicate'
         ? 'You already have an active hold on this title.'
         : 'Hold requested — the librarian has been notified.');
-    } catch {
-      setHoldMsg('Could not place the hold. Please try again.');
+    } catch (err) {
+      // Surface the real Firestore reason so we can tell a rules denial from an
+      // auth/index problem instead of a generic message.
+      let detail = err instanceof Error ? err.message : String(err);
+      try {
+        const parsed = JSON.parse(detail);
+        const signed = parsed?.authInfo?.userId ? 'signed-in' : 'NOT signed-in';
+        detail = `${parsed.error || 'unknown'} [${signed}]`;
+      } catch { /* not JSON — keep raw text */ }
+      setHoldMsg('Could not place the hold: ' + detail);
     } finally {
       setHoldLoading(false);
     }
