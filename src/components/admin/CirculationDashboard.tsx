@@ -16,7 +16,7 @@ import {
 import { db } from '@/src/lib/firebase';
 import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, orderBy, QueryDocumentSnapshot } from 'firebase/firestore';
 import { Book as BookType, UserProfile, Loan } from '@/src/types';
-import { format, addDays } from 'date-fns';
+import { format, addDays, addMonths } from 'date-fns';
 import { cn } from '@/src/lib/utils';
 import { BatchCirculationImporter } from './BatchCirculationImporter';
 
@@ -30,6 +30,12 @@ const safeDate = (v: any, fmt: string): string => {
     : (typeof v?.toDate === 'function' ? v.toDate() : (typeof v?.seconds === 'number' ? new Date(v.seconds * 1000) : null));
   return d && !isNaN(d.getTime()) ? format(d, fmt) : '';
 };
+
+// Borrowing policy. Students may hold a limited number of books, due in two
+// weeks; teachers (and other staff) borrow without limit for a full term.
+const STUDENT_LOAN_LIMIT = 3;   // max books a student may have out at once
+const STUDENT_LOAN_DAYS = 14;   // student due date: 2 weeks
+const STAFF_LOAN_MONTHS = 4;    // teacher/staff due date: ~1 term
 
 export const CirculationDashboard = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -196,6 +202,32 @@ export const CirculationDashboard = () => {
     setLoading(true);
     setStatus(null);
 
+    // Policy: students may hold at most STUDENT_LOAN_LIMIT books at once. Teachers
+    // and other staff are unlimited. Count active loans authoritatively (live
+    // query) so the cap holds even before the panel finished loading or across
+    // rapid scans; fall back to the in-memory list only if the query fails.
+    if (selectedUser.role === 'student') {
+      let activeCount = memberLoans.length;
+      try {
+        const snap = await getDocs(query(
+          collection(db, 'loans'),
+          where('userId', '==', selectedUser.uid),
+          where('status', '==', 'active'),
+        ));
+        activeCount = snap.size;
+      } catch (err) {
+        console.error('Loan-count check failed, using in-memory count:', err);
+      }
+      if (activeCount >= STUDENT_LOAN_LIMIT) {
+        setStatus({
+          type: 'error',
+          message: `Borrowing limit reached — students may borrow up to ${STUDENT_LOAN_LIMIT} books at a time. ${selectedUser.name.split(' ')[0]} already has ${activeCount} out; please return one first.`,
+        });
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const raw = barcode.trim();
       // Barcodes are stored in canonical case ("Zera40"), but a librarian may type
@@ -241,7 +273,11 @@ export const CirculationDashboard = () => {
       }
 
       const checkoutDate = new Date().toISOString();
-      const dueDate = addDays(new Date(), 14).toISOString();
+      // Students: due in 2 weeks. Teachers/staff: due at end of term (~4 months).
+      const dueDate = (selectedUser.role === 'student'
+        ? addDays(new Date(), STUDENT_LOAN_DAYS)
+        : addMonths(new Date(), STAFF_LOAN_MONTHS)
+      ).toISOString();
       const loanRef = await addDoc(collection(db, 'loans'), {
         userId: selectedUser.uid,
         userName: selectedUser.name,
@@ -483,6 +519,28 @@ export const CirculationDashboard = () => {
                      <p className="text-2xl font-black text-zera-emerald">{memberLoansLoading ? '…' : memberLoans.length}</p>
                      <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest">Books Out</p>
                    </div>
+                </div>
+                {/* Borrowing policy for this member's role. */}
+                <div className="mt-4 pt-3 border-t border-natural-border/60">
+                  {selectedUser.role === 'student' ? (
+                    <div className={cn(
+                      "flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
+                      memberLoans.length >= STUDENT_LOAN_LIMIT ? "text-red-500" : "text-natural-muted"
+                    )}>
+                      <User className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        Student · up to {STUDENT_LOAN_LIMIT} books · due in 2 weeks ·{' '}
+                        {memberLoans.length >= STUDENT_LOAN_LIMIT
+                          ? 'limit reached'
+                          : `${STUDENT_LOAN_LIMIT - memberLoans.length} left`}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-natural-muted">
+                      <User className="w-3.5 h-3.5 shrink-0" />
+                      <span>{selectedUser.role === 'teacher' ? 'Teacher' : 'Staff'} · unlimited · due end of term (~4 months)</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
