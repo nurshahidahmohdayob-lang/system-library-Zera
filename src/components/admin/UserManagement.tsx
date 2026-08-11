@@ -48,12 +48,19 @@ interface UserManagementProps {
 
 // Format a loan date (stored as ISO string; guarded for Firestore Timestamp)
 // into "Aug 6, 2026". Returns '' for missing/invalid dates.
-const fmtLoanDate = (v: any): string => {
-  if (!v) return '';
+// Parse a loan date that may be an ISO string, a Firestore Timestamp, or a
+// {seconds} shape (older/imported records). Returns null when unparseable.
+const parseLoanDate = (v: any): Date | null => {
+  if (!v) return null;
   const d = (typeof v === 'string' || typeof v === 'number')
     ? new Date(v)
     : (typeof v?.toDate === 'function' ? v.toDate() : (typeof v?.seconds === 'number' ? new Date(v.seconds * 1000) : null));
-  return d && !isNaN(d.getTime()) ? format(d, 'MMM d, yyyy') : '';
+  return d && !isNaN(d.getTime()) ? d : null;
+};
+
+const fmtLoanDate = (v: any): string => {
+  const d = parseLoanDate(v);
+  return d ? format(d, 'MMM d, yyyy') : '';
 };
 
 enum OperationType {
@@ -585,38 +592,51 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                 </div>
 
                 <div className="bg-natural-bg rounded-[32px] border border-natural-border p-4 space-y-3 max-h-[400px] overflow-y-auto">
-                   {userLoans.length > 0 ? userLoans.map(loan => (
+                   {userLoans.length > 0 ? userLoans.map(loan => {
+                     const due = parseLoanDate(loan.dueDate);
+                     const isOverdue = loan.status === 'active' && !!due && due.getTime() < Date.now();
+                     return (
                      <button
                        key={loan.id}
                        type="button"
                        onClick={() => openBookDetails(loan)}
                        title="View book details"
-                       className="w-full text-left bg-white p-5 rounded-2xl border border-natural-border flex items-center justify-between group shadow-sm hover:shadow-md hover:border-zera-emerald/40 transition-all cursor-pointer"
+                       className="w-full text-left bg-white p-5 rounded-2xl border border-natural-border flex items-center justify-between gap-3 group shadow-sm hover:shadow-md hover:border-zera-emerald/40 transition-all cursor-pointer"
                      >
-                       <div className="flex gap-4 items-center">
-                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                       <div className="flex gap-4 items-center min-w-0">
+                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center transition-colors shrink-0",
                             loan.status === 'active' ? "bg-amber-50 text-amber-600 border border-amber-100" : "bg-emerald-50 text-emerald-600 border border-emerald-100"
                           )}>
                              {viewBookLoading === loan.id ? <Loader2 className="w-5 h-5 animate-spin" /> : loan.status === 'active' ? <Clock className="w-5 h-5" /> : <Library className="w-5 h-5" />}
                           </div>
-                          <div>
-                            <p className="text-sm font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight underline decoration-transparent group-hover:decoration-zera-emerald/40 underline-offset-2">{loan.bookTitle}</p>
+                          <div className="min-w-0">
+                            <p className="text-sm font-black text-natural-text group-hover:text-zera-emerald transition-colors leading-tight underline decoration-transparent group-hover:decoration-zera-emerald/40 underline-offset-2 truncate">{loan.bookTitle}</p>
                             <p className="text-[10px] font-bold text-natural-muted uppercase mt-0.5">
                               Borrowed: {fmtLoanDate(loan.checkoutDate) || '—'}
-                              {loan.status === 'returned'
-                                ? <> · Returned: {fmtLoanDate(loan.returnDate) || '—'}</>
-                                : <> · Due: {fmtLoanDate(loan.dueDate) || '—'}</>}
+                              {loan.status === 'returned' && <> · Returned: {fmtLoanDate(loan.returnDate) || '—'}</>}
                             </p>
                           </div>
                        </div>
-                       <div className={cn(
-                        "text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border",
-                        loan.status === 'active' ? "bg-amber-400 text-amber-900 border-amber-300" : "bg-emerald-100 text-emerald-800 border-emerald-200"
-                       )}>
-                         {loan.status}
+                       <div className="flex flex-col items-end gap-1.5 shrink-0">
+                         <div className={cn(
+                          "text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border",
+                          isOverdue ? "bg-red-500 text-white border-red-600"
+                            : loan.status === 'active' ? "bg-amber-400 text-amber-900 border-amber-300"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                         )}>
+                           {isOverdue ? 'overdue' : loan.status}
+                         </div>
+                         {loan.status === 'active' && (
+                           <div className={cn(
+                             "text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border whitespace-nowrap",
+                             isOverdue ? "bg-red-50 text-red-700 border-red-200" : "bg-white text-natural-text border-natural-border"
+                           )}>
+                             Due {due ? format(due, 'd MMM yyyy') : '—'}
+                           </div>
+                         )}
                        </div>
                      </button>
-                   )) : (
+                   );}) : (
                      <div className="text-center py-20 grayscale opacity-30 font-serif italic text-lg">Member has no current or historical loans.</div>
                    )}
                 </div>
