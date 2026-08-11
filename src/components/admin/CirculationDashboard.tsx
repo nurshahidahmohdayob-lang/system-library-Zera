@@ -264,10 +264,35 @@ export const CirculationDashboard = () => {
         return;
       }
 
-      const bookData = bookDoc.data() as BookType;
+      let bookData = bookDoc.data() as BookType;
 
-      if (bookData.availableCopies <= 0) {
-        setStatus({ type: 'error', message: 'No copies available for checkout.' });
+      // The matched copy is fully out — but the library may hold OTHER copies of
+      // the same title (either as extra copies on this record, or as separate
+      // accession-numbered records sharing the same ISBN/title). Find one that's
+      // actually available and lend that instead, so a second borrower isn't
+      // wrongly told "no copies" while a copy sits on the shelf.
+      if ((bookData.availableCopies || 0) <= 0) {
+        const siblingDocs: QueryDocumentSnapshot[] = [];
+        try {
+          if (bookData.isbn && bookData.isbn.trim()) {
+            const s = await getDocs(query(collection(db, 'books'), where('isbn', '==', bookData.isbn)));
+            siblingDocs.push(...s.docs);
+          } else if (bookData.title) {
+            const s = await getDocs(query(collection(db, 'books'), where('title', '==', bookData.title)));
+            siblingDocs.push(...s.docs);
+          }
+        } catch (err) {
+          console.error('Sibling-copy lookup failed:', err);
+        }
+        const availableCopy = siblingDocs.find(d => ((d.data().availableCopies as number) || 0) > 0);
+        if (availableCopy) {
+          bookDoc = availableCopy;
+          bookData = availableCopy.data() as BookType;
+        }
+      }
+
+      if ((bookData.availableCopies || 0) <= 0) {
+        setStatus({ type: 'error', message: `All copies of “${bookData.title}” are currently out — none available to issue right now.` });
         setLoading(false);
         return;
       }
