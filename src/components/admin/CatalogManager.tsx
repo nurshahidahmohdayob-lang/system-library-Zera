@@ -61,6 +61,10 @@ export const CatalogManager = () => {
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Which book is currently being duplicated (for the per-row spinner), and a
+  // brief confirmation banner after a copy is created.
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const itemsPerPage = 20;
@@ -323,6 +327,60 @@ export const CatalogManager = () => {
     });
     setIsAdding(true);
   };
+
+  // Split one physical copy of a multi-copy book off into its own catalogue
+  // record: same bibliographic details and ISBN, but a brand-new accession
+  // number so each copy can be scanned & borrowed individually. The source
+  // record loses one copy so the total physical count stays correct.
+  const handleDuplicate = async (book: Book, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (duplicatingId) return;
+    setDuplicatingId(book.id);
+    try {
+      const now = new Date().toISOString();
+      const newBarcode = await BarcodeService.generateNextBarcode('book');
+      const sourceHasAvailable = (book.availableCopies || 0) > 0;
+
+      const { id: _ignoredId, ...rest } = book;
+      const copy = sanitizeForFirestore({
+        ...rest,
+        barcode: newBarcode,
+        totalCopies: 1,
+        availableCopies: sourceHasAvailable ? 1 : 0,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const newRef = await addDoc(collection(db, 'books'), copy);
+
+      // Peel one copy off the source.
+      const srcTotal = Math.max(1, (book.totalCopies || 1) - 1);
+      const srcAvail = sourceHasAvailable
+        ? Math.max(0, Math.min((book.availableCopies || 0) - 1, srcTotal))
+        : Math.min(book.availableCopies || 0, srcTotal);
+      await updateDoc(doc(db, 'books', book.id), {
+        totalCopies: srcTotal,
+        availableCopies: srcAvail,
+        updatedAt: now,
+      });
+
+      // Confirm with a brief banner; the onSnapshot listener refreshes the list.
+      setNotice(`Copy created for “${book.title}” — accession ${newBarcode}. ${srcTotal > 1 ? `${srcTotal} copies still share the original record.` : 'Each copy now has its own accession number.'}`);
+      setHighlightBookId(newRef.id);
+    } catch (err) {
+      console.error('Duplicate error:', err);
+      alert('Failed to duplicate copy: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
+
+  // Auto-dismiss the copy-created banner after a few seconds.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // When the Add/Edit form opens, scroll it into view and focus the title so
   // the librarian lands directly on the field they want to change.
@@ -1129,6 +1187,19 @@ export const CatalogManager = () => {
                 </td>
                 <td className="px-8 py-5 text-right" onClick={(e) => e.stopPropagation()}>
                    <div className="flex gap-2 justify-end">
+                     {(book.totalCopies || 0) > 1 && (
+                       <button
+                         disabled={!!duplicatingId}
+                         onClick={(e) => handleDuplicate(book, e)}
+                         title="Duplicate a copy — creates a separate record with the same ISBN but a new accession number"
+                         className="p-3 hover:bg-zera-emerald/10 text-natural-muted hover:text-zera-emerald rounded-2xl transition-all border border-transparent hover:border-zera-emerald/20 shadow-sm hover:shadow-md disabled:opacity-50 flex items-center gap-2"
+                       >
+                          {duplicatingId === book.id
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Copy className="w-4 h-4" />}
+                          <span className="text-[8px] font-black uppercase tracking-tighter hidden group-hover:inline">Copy</span>
+                       </button>
+                     )}
                      <button onClick={() => startEdit(book)} className="p-3 hover:bg-zera-yellow/10 text-natural-muted hover:text-zera-yellow-dark rounded-2xl transition-all border border-transparent hover:border-zera-yellow/20 shadow-sm hover:shadow-md">
                         <Edit2 className="w-4 h-4" />
                      </button>
@@ -1168,6 +1239,13 @@ export const CatalogManager = () => {
           </div>
         )}
       </div>
+      {notice && (
+        <div className="fixed bottom-6 right-6 z-[120] max-w-sm bg-zera-emerald text-white px-5 py-4 rounded-2xl shadow-2xl border border-zera-emerald-dark flex items-start gap-3 animate-in slide-in-from-bottom-4 fade-in">
+          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+          <p className="text-sm font-bold leading-snug">{notice}</p>
+          <button onClick={() => setNotice(null)} className="ml-1 shrink-0 opacity-80 hover:opacity-100" title="Dismiss"><X className="w-4 h-4" /></button>
+        </div>
+      )}
       {/* Book Detail View Modal */}
       {selectedBookForView && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8">
