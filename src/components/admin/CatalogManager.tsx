@@ -28,6 +28,19 @@ import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchWebEnri
 import { BarcodeService } from '@/src/services/BarcodeService';
 import { Sparkles, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 
+// Firestore rejects `undefined` field values outright, and empty number inputs
+// (parseInt('')) or web enrichment can leave a field as `undefined`/`NaN`.
+// Drop any such fields so a blank optional value never blocks the save.
+const sanitizeForFirestore = <T extends Record<string, any>>(obj: T): Partial<T> => {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    if (typeof v === 'number' && Number.isNaN(v)) continue;
+    out[k] = v;
+  }
+  return out as Partial<T>;
+};
+
 // The date a book was keyed into the system (its createdAt). Handles the ISO
 // string we store, and defensively a Firestore Timestamp, formatted like
 // "23 Jul 2026". Returns '' when there's no usable date.
@@ -245,19 +258,19 @@ export const CatalogManager = () => {
       }
 
       if (editingBook) {
-        await updateDoc(doc(db, 'books', editingBook.id), {
+        await updateDoc(doc(db, 'books', editingBook.id), sanitizeForFirestore({
           ...bookToSave,
           updatedAt: now
-        });
+        }));
         setEditingBook(null);
       } else {
-        const newRef = await addDoc(collection(db, 'books'), {
+        const newRef = await addDoc(collection(db, 'books'), sanitizeForFirestore({
           ...bookToSave,
           availableCopies: bookToSave.totalCopies,
           status: 'active',
           createdAt: now,
           updatedAt: now
-        });
+        }));
         // Reset any active search/filter and jump to the last page so the newly
         // added book (now at the bottom of the catalogue) is visible and briefly
         // highlighted — clear confirmation the save succeeded.
@@ -815,7 +828,7 @@ export const CatalogManager = () => {
                   type="number"
                   placeholder="YYYY"
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text"
-                  value={newBook.publishedYear} onChange={e => setNewBook({...newBook, publishedYear: parseInt(e.target.value)})}
+                  value={newBook.publishedYear} onChange={e => setNewBook({...newBook, publishedYear: parseInt(e.target.value) || 0})}
                 />
               </div>
               <div className="space-y-2">
@@ -843,7 +856,7 @@ export const CatalogManager = () => {
                   type="number"
                   placeholder="Page Count"
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text" 
-                  value={newBook.pageCount} onChange={e => setNewBook({...newBook, pageCount: parseInt(e.target.value)})}
+                  value={newBook.pageCount} onChange={e => setNewBook({...newBook, pageCount: parseInt(e.target.value) || 0})}
                 />
               </div>
               <div className="space-y-2">
@@ -861,7 +874,7 @@ export const CatalogManager = () => {
                   min="1"
                   required
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text font-bold" 
-                  value={newBook.totalCopies} onChange={e => setNewBook({...newBook, totalCopies: parseInt(e.target.value)})}
+                  value={newBook.totalCopies} onChange={e => setNewBook({...newBook, totalCopies: parseInt(e.target.value) || 1})}
                 />
               </div>
             </div>
