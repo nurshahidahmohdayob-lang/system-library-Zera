@@ -4,6 +4,141 @@ import { Book } from '@/src/types';
 const lookupCache = new Map<string, Partial<Book>>();
 
 /**
+ * Every outbound bibliographic lookup goes through this. Without it a single
+ * slow source (the LOC Z39.50 endpoint routinely stalls for 30s+, and Google
+ * Books hangs rather than 429s when quota-limited) holds the whole cataloguing
+ * form hostage — `Promise.any` only rejects once the *slowest* member settles,
+ * so one dead source set the floor for how long a failed scan took.
+ */
+const LOOKUP_TIMEOUT_MS = 3000;
+// The enrichment endpoint fans out over several sources plus an AI synopsis
+// fallback, so it legitimately needs longer — but still needs a ceiling.
+const ENRICH_TIMEOUT_MS = 15000;
+
+/**
+ * Per-source circuit breaker — the single biggest thing standing between a
+ * librarian and a fast scan.
+ *
+ * These sources go down, and when they do they don't refuse connections, they
+ * *hang*: openlibrary.org currently accepts nothing at all, and Google Books
+ * answers 429 once the daily quota is spent. Without a breaker every single
+ * scan re-pays the full timeout for every dead source, several times over
+ * (Open Library alone is consulted by the ISBN lookup, the cover cascade and
+ * the title fallback). One dead host turned a sub-second lookup into a
+ * twenty-second one, on every book.
+ *
+ * So: after two consecutive failures a source is considered down and skipped
+ * outright for five minutes. The first scan pays the timeout; the rest of the
+ * cataloguing session doesn't. A single success closes the breaker again, so a
+ * source coming back up is picked up within the cooldown.
+ */
+const BREAKER_THRESHOLD = 2;
+const BREAKER_COOLDOWN_MS = 5 * 60_000;
+const BREAKER_STORAGE_KEY = 'zera_catalog_source_health';
+
+type BreakerEntry = { failures: number; openUntil: number };
+
+/**
+ * Held in sessionStorage as well as memory: a librarian cataloguing a trolley of
+ * books reloads the page now and then, and an in-memory-only breaker makes the
+ * first scan after every reload re-pay the full timeout for each dead source.
+ * `openUntil` is an absolute timestamp, so a stored entry still expires on
+ * schedule and a recovered source is never locked out.
+ */
+const loadBreaker = (): Map<string, BreakerEntry> => {
+  try {
+    const raw = sessionStorage.getItem(BREAKER_STORAGE_KEY);
+    if (raw) return new Map(Object.entries(JSON.parse(raw) as Record<string, BreakerEntry>));
+  } catch {
+    // private mode / corrupt entry — start clean
+  }
+  return new Map();
+};
+
+const breaker = loadBreaker();
+
+const persistBreaker = () => {
+  try {
+    sessionStorage.setItem(BREAKER_STORAGE_KEY, JSON.stringify(Object.fromEntries(breaker)));
+  } catch {
+    // storage unavailable — the in-memory breaker still works for this page
+  }
+};
+
+/**
+ * Same-origin endpoints are keyed by path, not host: `/api/v1/lexile` answers
+ * in under a second while `/api/v1/cover` sits on a dead upstream, and lumping
+ * them under one key would take the healthy one down with it.
+ */
+const breakerKey = (url: string): string => {
+  if (url.startsWith('/')) return url.split('?')[0];
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+class SourceDownError extends Error {
+  constructor(key: string) {
+    super(`Source ${key} is marked down; skipping`);
+  }
+}
+
+const isSourceDown = (key: string): boolean => {
+  const entry = breaker.get(key);
+  return !!entry && entry.failures >= BREAKER_THRESHOLD && entry.openUntil > Date.now();
+};
+
+const noteFailure = (key: string) => {
+  const entry = breaker.get(key) || { failures: 0, openUntil: 0 };
+  entry.failures += 1;
+  entry.openUntil = Date.now() + BREAKER_COOLDOWN_MS;
+  breaker.set(key, entry);
+  persistBreaker();
+  if (entry.failures === BREAKER_THRESHOLD) {
+    console.warn(`[catalog] "${key}" is not responding — skipping it for ${BREAKER_COOLDOWN_MS / 60000} min.`);
+  }
+};
+
+const noteSuccess = (key: string) => {
+  if (breaker.delete(key)) persistBreaker();
+};
+
+async function fetchWithTimeout(url: string, timeoutMs = LOOKUP_TIMEOUT_MS, init?: RequestInit): Promise<Response> {
+  const key = breakerKey(url);
+  if (isSourceDown(key)) throw new SourceDownError(key);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    // A quota rejection or a server error means this source is no use to us for
+    // the next while either — a 429 from Google Books is good for the whole day.
+    if (res.status === 429 || res.status >= 500) noteFailure(key);
+    else noteSuccess(key);
+    return res;
+  } catch (err) {
+    noteFailure(key);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Google Books is queried without a key by default, which drops every caller
+ * into one shared anonymous quota pool — and that pool runs dry ("Quota
+ * exceeded for quota metric 'Queries' and limit 'Queries per day'"). A
+ * quota-exhausted Google Books is what pushes cataloguing onto the slower
+ * fallback sources in the first place, so set VITE_GOOGLE_BOOKS_API_KEY to give
+ * this install its own quota. Entirely optional — unset, behaviour is unchanged.
+ */
+const GOOGLE_BOOKS_KEY: string = import.meta.env.VITE_GOOGLE_BOOKS_API_KEY || '';
+const googleBooksUrl = (query: string, extra = ''): string =>
+  `https://www.googleapis.com/books/v1/volumes?q=${query}${extra}${GOOGLE_BOOKS_KEY ? `&key=${GOOGLE_BOOKS_KEY}` : ''}`;
+
+/**
  * True when the text is an actual synopsis rather than one of the
  * system-generated placeholder strings stamped on records with no abstract.
  */
@@ -26,7 +161,7 @@ export function isRealSynopsis(text?: string | null): text is string {
 export async function fetchSynopsisFromWeb(book: Partial<Book>): Promise<string> {
   if (!book.title && !book.isbn) return '';
   try {
-    const res = await fetch('/api/v1/enrich-book-ai', {
+    const res = await fetchWithTimeout('/api/v1/enrich-book-ai', ENRICH_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -59,7 +194,7 @@ export async function fetchWebEnrichment(
   const empty = { description: '', publisher: '', author: '' };
   if (!book.title && !book.isbn) return empty;
   try {
-    const res = await fetch('/api/v1/enrich-book-ai', {
+    const res = await fetchWithTimeout('/api/v1/enrich-book-ai', ENRICH_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -116,7 +251,7 @@ export async function fetchCoverFromWeb(book: Partial<Book>): Promise<string> {
 
   const googleQuery = async (q: string): Promise<string> => {
     try {
-      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5`);
+      const res = await fetchWithTimeout(googleBooksUrl(`${q}`, '&maxResults=5'));
       if (!res.ok) return '';
       const data = await res.json();
       if (!data.items) return '';
@@ -130,59 +265,50 @@ export async function fetchCoverFromWeb(book: Partial<Book>): Promise<string> {
     return '';
   };
 
-  // 1. Google Books by ISBN (highest-resolution jacket when available).
-  if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
-    const byIsbn = await googleQuery(`isbn:${cleanIsbn}`);
-    if (byIsbn) return byIsbn;
-  }
-
-  // 2. Google Books by title (+ author when known).
-  if (book.title?.trim()) {
-    const parts = [`intitle:${book.title.trim()}`];
-    if (book.author?.trim()) parts.push(`inauthor:${book.author.trim().split(',')[0]}`);
-    const byTitle = await googleQuery(encodeURIComponent(parts.join('+')));
-    if (byTitle) return byTitle;
-  }
-
-  // 3. Server-side Open Library cover lookup (no quota, matches by ISBN then
-  //    title+author, and only returns a genuinely-existing cover). This is the
-  //    reliable fallback when Google Books is rate-limited in the browser.
-  if (cleanIsbn || book.title?.trim()) {
+  const serverCover = async (): Promise<string> => {
+    if (!cleanIsbn && !book.title?.trim()) return '';
     try {
       const params = new URLSearchParams();
       if (book.title?.trim()) params.set('title', book.title.trim());
       if (book.author?.trim()) params.set('author', book.author.trim());
       if (cleanIsbn) params.set('isbn', cleanIsbn);
-      const res = await fetch(`/api/v1/cover?${params.toString()}`);
+      const res = await fetchWithTimeout(`/api/v1/cover?${params.toString()}`, 6000);
       if (res.ok) {
         const data = await res.json();
-        if (isRealCover(data?.coverUrl)) return data.coverUrl.trim();
+        if (isRealCover(data?.coverUrl)) return String(data.coverUrl).trim();
       }
     } catch {
-      // ignore and try the data lookups below
+      // source down or timed out — the other probes may still land
     }
-  }
+    return '';
+  };
 
-  // 4. Final fallback: the standard metadata lookups.
-  if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
-    try {
-      const match = await lookupBookByIsbn(cleanIsbn);
-      if (isRealCover(match?.coverUrl)) return match!.coverUrl!.trim();
-    } catch {
-      // ignore
-    }
-  }
-  if (book.title?.trim()) {
-    try {
-      const matches = await lookupBookByTitle(book.title.trim());
-      const withCover = matches?.find(m => isRealCover(m.coverUrl));
-      if (withCover) return withCover.coverUrl!.trim();
-    } catch {
-      // nothing found
-    }
-  }
+  // All three probes are independent, so they run together: this used to be a
+  // strictly serial chain where each dead source's timeout was *added* to the
+  // next, which is how a missing jacket came to cost 12-20 seconds. Now the wait
+  // is the slowest single probe, not the sum of all of them.
+  //
+  // They are still ranked, not first-past-the-post — a Google Books jacket is
+  // higher resolution and edition-accurate, so it wins whenever it exists, and
+  // an ISBN match beats a title match.
+  const [byIsbn, byTitle, fromServer] = await Promise.all([
+    cleanIsbn.length === 10 || cleanIsbn.length === 13
+      ? googleQuery(`isbn:${cleanIsbn}`)
+      : Promise.resolve(''),
+    book.title?.trim()
+      ? googleQuery(encodeURIComponent(
+          [`intitle:${book.title.trim()}`, ...(book.author?.trim() ? [`inauthor:${book.author.trim().split(',')[0]}`] : [])].join('+')
+        ))
+      : Promise.resolve(''),
+    serverCover()
+  ]);
 
-  return '';
+  // The old final fallback (re-running lookupBookByIsbn / lookupBookByTitle just
+  // to read a cover off the result) is gone: it re-queried the exact same two
+  // sources these probes already cover, and lookupBookByTitle deep-enriches
+  // every match one at a time — a very long tail for a jacket we'd already
+  // failed to find.
+  return byIsbn || fromServer || byTitle || '';
 }
 
 /**
@@ -195,10 +321,14 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
   // Create copies of fields to mutate safely
   const enriched: Partial<Book> = { ...book };
   
-  // If we have an ISBN but are missing core structural details like summary or cover, do a deep Google Books / Open Library call
-  if (enriched.isbn && (!enriched.description || !enriched.coverUrl || !enriched.publisher || !enriched.category)) {
+  // If we have an ISBN but are missing core structural details like summary or cover, do a deep Google Books / Open Library call.
+  // Records that already came from Google Books skip it: re-requesting the exact
+  // same volumes?q=isbn URL only added a round-trip (and burnt quota) to learn
+  // that the fields really are absent upstream.
+  const alreadyFromGoogle = (book as { source?: string }).source === 'Google';
+  if (!alreadyFromGoogle && enriched.isbn && (!enriched.description || !enriched.coverUrl || !enriched.publisher || !enriched.category)) {
     try {
-      const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${enriched.isbn}`);
+      const gRes = await fetchWithTimeout(googleBooksUrl(`isbn:${enriched.isbn}`));
       if (gRes.ok) {
         const gData = await gRes.json();
         if (gData.items && gData.items.length > 0) {
@@ -243,7 +373,7 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
     
     // Quick head check to verify Open Library actually has this cover, otherwise fallback to Unsplash aesthetic placeholder
     try {
-      const testRes = await fetch(enriched.coverUrl, { method: 'HEAD' });
+      const testRes = await fetchWithTimeout(enriched.coverUrl, 2500, { method: 'HEAD' });
       if (!testRes.ok) {
         throw new Error();
       }
@@ -291,7 +421,7 @@ export async function fetchLexileFromWeb(book: Partial<Book>): Promise<string> {
     if (book.title) params.set('title', book.title);
     if (book.author) params.set('author', book.author);
     if (book.isbn) params.set('isbn', book.isbn);
-    const res = await fetch(`/api/v1/lexile?${params.toString()}`);
+    const res = await fetchWithTimeout(`/api/v1/lexile?${params.toString()}`, 8000);
     if (res.ok) {
       const data = await res.json();
       if (typeof data?.lexileLevel === 'string' && data.lexileLevel) return data.lexileLevel;
@@ -318,7 +448,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
   try {
     // Faster parallel lookup strategy
     const searchLOC = async () => {
-      const res = await fetch(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${sanitizedIsbn}&maximumRecords=1&recordSchema=bibframe`);
+      const res = await fetchWithTimeout(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${sanitizedIsbn}&maximumRecords=1&recordSchema=bibframe`);
       if (!res.ok) throw new Error();
       const xml = await res.text();
       const t = xml.match(/<title[^>]*>([^<]+)<\/title>/);
@@ -336,7 +466,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
     };
 
     const searchGoogle = async () => {
-      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${sanitizedIsbn}`);
+      const res = await fetchWithTimeout(googleBooksUrl(`isbn:${sanitizedIsbn}`));
       if (!res.ok) throw new Error();
       const data = await res.json();
       if (!data.items) throw new Error();
@@ -366,7 +496,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
     };
 
     const searchOL = async () => {
-      const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${sanitizedIsbn}&format=json&jscmd=data`);
+      const res = await fetchWithTimeout(`https://openlibrary.org/api/books?bibkeys=ISBN:${sanitizedIsbn}&format=json&jscmd=data`);
       if (!res.ok) throw new Error();
       const data = await res.json();
       const key = `ISBN:${sanitizedIsbn}`;
@@ -416,7 +546,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
 
 async function searchGoogleFallback(isbn: string): Promise<Partial<Book> | null> {
   try {
-    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
+    const res = await fetchWithTimeout(googleBooksUrl(`isbn:${isbn}`));
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.items || data.items.length === 0) return null;
@@ -450,8 +580,8 @@ export async function lookupBookByTitle(title: string): Promise<Partial<Book>[] 
     searchTitle = searchTitle.replace(/\(.*?\)|\[.*?\]/g, '').trim(); // remove (Vol 1) etc
 
     // Strategy 1: Google Books flexible query (performs approximate and index lookups)
-    const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchTitle)}&maxResults=5`;
-    const response = await fetch(googleUrl);
+    const googleUrl = googleBooksUrl(encodeURIComponent(searchTitle), '&maxResults=5');
+    const response = await fetchWithTimeout(googleUrl);
     
     let items: any[] = [];
     if (response.ok) {
@@ -500,7 +630,7 @@ export async function lookupBookByTitle(title: string): Promise<Partial<Book>[] 
     if (books.length === 0) {
       const olSearchUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(searchTitle)}&limit=3`;
       try {
-        const olRes = await fetch(olSearchUrl);
+        const olRes = await fetchWithTimeout(olSearchUrl);
         if (olRes.ok) {
           const olData = await olRes.json();
           if (olData.docs && olData.docs.length > 0) {

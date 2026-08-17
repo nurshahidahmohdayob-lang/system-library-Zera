@@ -432,6 +432,61 @@ function getStaffStatus(commencement: string, leave: string | null): 'active' | 
 }
 
 /**
+ * Per-host circuit breaker for the outbound bibliographic sources, mirroring the
+ * one in src/services/catalogService.ts.
+ *
+ * These hosts fail by hanging rather than refusing: when openlibrary.org is
+ * down it accepts no connection at all, so every request rides its timeout to
+ * the end. The enrichment endpoints consult the same handful of hosts several
+ * times per book, so one dead host cost a multiple of its timeout on *every*
+ * catalogued title. After two consecutive failures a host is skipped outright
+ * for five minutes; one success reopens it.
+ */
+const HOST_BREAKER_THRESHOLD = 2;
+const HOST_BREAKER_COOLDOWN_MS = 5 * 60_000;
+const hostBreaker = new Map<string, { failures: number; openUntil: number }>();
+
+const breakerHost = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+export const isHostDown = (url: string): boolean => {
+  const entry = hostBreaker.get(breakerHost(url));
+  return !!entry && entry.failures >= HOST_BREAKER_THRESHOLD && entry.openUntil > Date.now();
+};
+
+export const noteHostFailure = (url: string): void => {
+  const host = breakerHost(url);
+  const entry = hostBreaker.get(host) || { failures: 0, openUntil: 0 };
+  entry.failures += 1;
+  entry.openUntil = Date.now() + HOST_BREAKER_COOLDOWN_MS;
+  hostBreaker.set(host, entry);
+  if (entry.failures === HOST_BREAKER_THRESHOLD) {
+    console.warn(`[catalog] "${host}" is not responding — skipping it for ${HOST_BREAKER_COOLDOWN_MS / 60000} min.`);
+  }
+};
+
+export const noteHostSuccess = (url: string): void => {
+  hostBreaker.delete(breakerHost(url));
+};
+
+/**
+ * Keyless Google Books requests all share one anonymous daily quota, which runs
+ * dry and starts answering 429 — the point at which enrichment falls through to
+ * the slower sources. Set GOOGLE_BOOKS_API_KEY for this install's own quota;
+ * without it the URL is exactly what it was before. Mirrors
+ * VITE_GOOGLE_BOOKS_API_KEY on the client.
+ */
+const googleBooksUrl = (query: string, extra = ''): string => {
+  const key = process.env.GOOGLE_BOOKS_API_KEY || '';
+  return `https://www.googleapis.com/books/v1/volumes?q=${query}${extra}${key ? `&key=${key}` : ''}`;
+};
+
+/**
  * Keyless web-synopsis scraper. When the bibliographic databases (Google Books,
  * Open Library, LOC, Wikipedia) hold no abstract for a title, this discovers the
  * book's page on a consumer book site via DuckDuckGo's HTML endpoint (no API key)
@@ -442,6 +497,7 @@ async function scrapeWebBookData(title: string, author?: string, isbn?: string):
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
   const fetchText = async (url: string, timeoutMs = 5000): Promise<string> => {
+    if (isHostDown(url)) return '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -449,9 +505,12 @@ async function scrapeWebBookData(title: string, author?: string, isbn?: string):
         headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
         signal: controller.signal,
       });
+      if (res.status === 429 || res.status >= 500) noteHostFailure(url);
+      else noteHostSuccess(url);
       if (!res.ok) return '';
       return await res.text();
     } catch {
+      noteHostFailure(url);
       return '';
     } finally {
       clearTimeout(timer);
@@ -843,16 +902,20 @@ export async function createApiApp() {
   // never attach a blank placeholder. No API key and no per-user quota.
   const lookupCoverImage = async (title: string, author: string, isbn: string): Promise<string> => {
     const olFetch = async (url: string): Promise<any | null> => {
+      if (isHostDown(url)) return null;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
       try {
         const r = await fetch(url, {
           signal: controller.signal,
           headers: { 'User-Agent': 'ZeraLibrary/1.0 (library@zera.edu.my)' },
         });
+        if (r.status === 429 || r.status >= 500) noteHostFailure(url);
+        else noteHostSuccess(url);
         if (!r.ok) return null;
         return await r.json();
       } catch {
+        noteHostFailure(url);
         return null;
       } finally {
         clearTimeout(timeoutId);
@@ -864,23 +927,31 @@ export async function createApiApp() {
 
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-    // 1. Exact ISBN match — most reliable.
+    // The ISBN and title searches are independent, so they go out together and
+    // the endpoint costs one round-trip rather than two. Serially they were the
+    // whole 12-second budget of this route whenever Open Library was unwell.
     const cleanIsbn = (isbn || '').replace(/[^0-9X]/gi, '');
-    if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
-      const data = await olFetch(`https://openlibrary.org/search.json?isbn=${cleanIsbn}&limit=1&fields=cover_i,title`);
-      const doc = data?.docs?.[0];
-      const url = coverFromId(doc?.cover_i);
-      if (url) return url;
-    }
+    const titleParams = new URLSearchParams({ title: (title || '').trim(), limit: '8' });
+    if (author && author.trim()) titleParams.set('author', author.trim().split(',')[0]);
+    titleParams.set('fields', 'title,author_name,cover_i');
+
+    const [isbnData, titleData] = await Promise.all([
+      cleanIsbn.length === 10 || cleanIsbn.length === 13
+        ? olFetch(`https://openlibrary.org/search.json?isbn=${cleanIsbn}&limit=1&fields=cover_i,title`)
+        : Promise.resolve(null),
+      title && title.trim()
+        ? olFetch(`https://openlibrary.org/search.json?${titleParams.toString()}`)
+        : Promise.resolve(null)
+    ]);
+
+    // 1. Exact ISBN match — most reliable, so it still wins.
+    const byIsbn = coverFromId(isbnData?.docs?.[0]?.cover_i);
+    if (byIsbn) return byIsbn;
 
     // 2. Title (+author) search. Prefer a doc whose title matches exactly so we
     //    don't grab an omnibus/study-guide cover for the wrong edition.
     if (title && title.trim()) {
-      const params = new URLSearchParams({ title: title.trim(), limit: '8' });
-      if (author && author.trim()) params.set('author', author.trim().split(',')[0]);
-      params.set('fields', 'title,author_name,cover_i');
-      const data = await olFetch(`https://openlibrary.org/search.json?${params.toString()}`);
-      const docs: any[] = Array.isArray(data?.docs) ? data.docs : [];
+      const docs: any[] = Array.isArray(titleData?.docs) ? titleData.docs : [];
       const target = normalize(title);
       const withCover = docs.filter(d => typeof d.cover_i === 'number' && d.cover_i > 0);
 
@@ -948,14 +1019,18 @@ export async function createApiApp() {
       console.log(`[WorldCatalog & Z39.50] Fetching bibliography for Title: "${t}", ISBN: "${i || 'N/A'}"`);
       
       const fetchWithTimeout = async (url: string, timeoutMs = 1500): Promise<Response> => {
+        if (isHostDown(url)) throw new Error(`Source ${breakerHost(url)} is marked down; skipping`);
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetch(url, { signal: controller.signal });
           clearTimeout(timeoutId);
+          if (response.status === 429 || response.status >= 500) noteHostFailure(url);
+          else noteHostSuccess(url);
           return response;
         } catch (err) {
           clearTimeout(timeoutId);
+          noteHostFailure(url);
           throw err;
         }
       };
@@ -993,7 +1068,7 @@ export async function createApiApp() {
         if (cleanIsbn) {
           // A. Try Google Books API by ISBN for genuine synopses
           try {
-            const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+            const res = await fetchWithTimeout(googleBooksUrl(`isbn:${cleanIsbn}`));
             if (res.ok) {
               const data = await res.json();
               if (data.items && data.items.length > 0) {
@@ -1106,7 +1181,7 @@ export async function createApiApp() {
 
         // A. Google Books Search
         try {
-          const res = await fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(queryStr)}&maxResults=2`);
+          const res = await fetchWithTimeout(googleBooksUrl(encodeURIComponent(queryStr), '&maxResults=2'));
           if (res.ok) {
             const data = await res.json();
             if (data.items && data.items.length > 0) {

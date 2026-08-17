@@ -17,12 +17,13 @@ import {
   Layers,
   Copy,
   CheckCircle2,
-  CalendarPlus
+  CalendarPlus,
+  User
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
-import { Book } from '@/src/types';
+import { Book, Loan } from '@/src/types';
 import { cn, clean } from '@/src/lib/utils';
 import { lookupBookByIsbn, lookupBookByTitle, fetchSynopsisFromWeb, fetchWebEnrichment, fetchLexileFromWeb, fetchCoverFromWeb, isRealSynopsis, isRealCover } from '@/src/services/catalogService';
 import { BarcodeService } from '@/src/services/BarcodeService';
@@ -54,17 +55,37 @@ const formatDateAdded = (v: any): string => {
   return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
+/** Strip hyphens/spaces so a scanned EAN and a typed ISBN compare equal. */
+const sanitizeIsbn = (isbn?: string | null) => (isbn || '').replace(/[^0-9X]/gi, '').toUpperCase();
+
+/** A complete ISBN-10 or ISBN-13 — the point at which a scan is worth searching on. */
+const isCompleteIsbn = (isbn: string) => isbn.length === 10 || isbn.length === 13;
+
+/** How long a lookup will hold its spinner waiting for the book jacket. */
+const COVER_WAIT_MS = 7000;
+
 export const CatalogManager = () => {
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBookForView, setSelectedBookForView] = useState<Book | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  // The slow web top-up (synopsis / Lexile / cover) runs after the form is
+  // already filled, so it gets its own quiet indicator rather than the blocking
+  // lookup spinner. `enrichSeqRef` discards results from a superseded scan.
+  const [isEnriching, setIsEnriching] = useState(false);
+  const enrichSeqRef = useRef(0);
+  // Last ISBN the scan watcher (or a manual lookup) already searched for, so a
+  // single scan never triggers two lookups.
+  const lastAutoLookupRef = useRef('');
   const [saving, setSaving] = useState(false);
   // Which book is currently being duplicated (for the per-row spinner), and a
   // brief confirmation banner after a copy is created.
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Active loans grouped by bookId, so the catalogue can show who currently has
+  // each issued-out book. Kept live via an onSnapshot listener.
+  const [activeLoansByBook, setActiveLoansByBook] = useState<Record<string, Loan[]>>({});
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const itemsPerPage = 20;
@@ -79,6 +100,7 @@ export const CatalogManager = () => {
   // at the top of the page and looks like nothing happened.
   const formRef = useRef<HTMLFormElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const isbnInputRef = useRef<HTMLInputElement>(null);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -173,13 +195,15 @@ export const CatalogManager = () => {
   // author (web search), and a Lexile measure before it reaches the form, so the
   // librarian sees (and can tweak) the real values. Web-sourced fields only fill
   // gaps — they never overwrite data the structured lookup or librarian provided.
-  const withWebSynopsis = async (draft: Partial<Book>): Promise<Partial<Book>> => {
+  // `skipCover` is set by the lookup handlers, which resolve the jacket up front
+  // (see resolveCover) and only use this for the remaining slow fields.
+  const withWebSynopsis = async (draft: Partial<Book>, opts?: { skipCover?: boolean }): Promise<Partial<Book>> => {
     const needsEnrich = !isRealSynopsis(draft.description) || !draft.publisher || !draft.publishedYear || !draft.author;
     const emptyEnrich = { description: '', publisher: '', author: '', publishedYear: undefined as number | undefined };
     const [enrich, lexile, cover] = await Promise.all([
       needsEnrich ? fetchWebEnrichment(draft) : Promise.resolve(emptyEnrich),
       draft.lexileLevel ? Promise.resolve('') : fetchLexileFromWeb(draft),
-      isRealCover(draft.coverUrl) ? Promise.resolve('') : fetchCoverFromWeb(draft)
+      opts?.skipCover || isRealCover(draft.coverUrl) ? Promise.resolve('') : fetchCoverFromWeb(draft)
     ]);
     return {
       ...draft,
@@ -192,14 +216,88 @@ export const CatalogManager = () => {
     };
   };
 
-  const handleIsbnLookup = async () => {
-    if (!newBook.isbn) return;
+  // Drop a freshly-found jacket into the form, but only while it is still the
+  // same book and the slot is still empty — the librarian may have moved on or
+  // pasted their own cover URL while the search was running.
+  const applyCover = (draft: Partial<Book>, url: string) => {
+    if (!isRealCover(url)) return;
+    setNewBook(prev =>
+      sanitizeIsbn(prev.isbn) === sanitizeIsbn(draft.isbn) && !isRealCover(prev.coverUrl)
+        ? { ...prev, coverUrl: url }
+        : prev
+    );
+  };
+
+  // The cover is the one field a librarian eyeballs to confirm the scan matched
+  // the right edition, so the lookup spinner waits for it rather than finishing
+  // against an empty jacket box (which reads as "lookup failed"). The wait is
+  // capped: fetchCoverFromWeb cascades through Google Books by ISBN, by title,
+  // the Open Library proxy and finally the full metadata lookups, so an unknown
+  // book could otherwise hang the form for half a minute. Past the cap the form
+  // is released and the cover still drops in on its own when it lands.
+  const resolveCover = async (draft: Partial<Book>): Promise<string> => {
+    if (isRealCover(draft.coverUrl)) return draft.coverUrl;
+    const pending = fetchCoverFromWeb(draft).catch(() => '');
+    void pending.then(url => applyCover(draft, url));
+    const deadline = new Promise<string>(resolve => setTimeout(() => resolve(''), COVER_WAIT_MS));
+    return Promise.race([pending, deadline]);
+  };
+
+  // Top the draft up from the slow web sources (DuckDuckGo scrape + AI synopsis,
+  // Lexile scrape) WITHOUT holding the form hostage. Blocking the
+  // lookup spinner on these is what made cataloguing a book feel like it hung:
+  // the structured ISBN lookup resolves in well under a second, but the web
+  // enrichment behind it can take another ten or twenty. Now the librarian gets
+  // the bibliographic record immediately and the extras land as they arrive.
+  const enrichDraftInBackground = (draft: Partial<Book>) => {
+    const seq = ++enrichSeqRef.current;
+    setIsEnriching(true);
+    // The cover was already resolved (or is still in flight from resolveCover,
+    // which will fill it in itself) — searching for it again here would only
+    // duplicate that whole cascade.
+    withWebSynopsis(draft, { skipCover: true })
+      .then(enriched => {
+        // A newer scan/lookup superseded this one — its results are stale.
+        if (seq !== enrichSeqRef.current) return;
+        setNewBook(prev => {
+          // The librarian moved on to a different book while we were waiting.
+          if (sanitizeIsbn(prev.isbn) !== sanitizeIsbn(draft.isbn)) return prev;
+          // Only fill gaps — never clobber anything typed during the wait.
+          return {
+            ...prev,
+            ...(!isRealSynopsis(prev.description) && isRealSynopsis(enriched.description) ? { description: enriched.description } : {}),
+            ...(!prev.publisher && enriched.publisher ? { publisher: enriched.publisher } : {}),
+            ...(!prev.author && enriched.author ? { author: enriched.author } : {}),
+            ...(!prev.publishedYear && enriched.publishedYear ? { publishedYear: enriched.publishedYear } : {}),
+            ...(!prev.lexileLevel && enriched.lexileLevel ? { lexileLevel: enriched.lexileLevel } : {}),
+            ...(!isRealCover(prev.coverUrl) && isRealCover(enriched.coverUrl) ? { coverUrl: enriched.coverUrl } : {})
+          };
+        });
+      })
+      .catch(err => console.warn('Background enrichment failed:', err))
+      .finally(() => {
+        if (seq === enrichSeqRef.current) setIsEnriching(false);
+      });
+  };
+
+  const handleIsbnLookup = async (isbnOverride?: string) => {
+    const isbn = (isbnOverride ?? newBook.isbn ?? '').trim();
+    if (!isbn) return;
+    // Record what we looked up so the scan watcher below doesn't immediately
+    // fire again on the canonical ISBN-13 the lookup writes back into the field.
+    lastAutoLookupRef.current = sanitizeIsbn(isbn);
     setIsSearching(true);
     try {
-      const data = await lookupBookByIsbn(newBook.isbn);
+      const data = await lookupBookByIsbn(isbn);
       if (data) {
-        const merged = await withWebSynopsis({ ...newBook, ...data });
-        setNewBook(merged);
+        const draft = { ...newBook, ...data };
+        lastAutoLookupRef.current = sanitizeIsbn(draft.isbn);
+        // Show the bibliographic record straight away, then keep the spinner
+        // running only until the jacket is in.
+        setNewBook(draft);
+        const cover = await resolveCover(draft);
+        const withCover = isRealCover(cover) ? { ...draft, coverUrl: cover } : draft;
+        enrichDraftInBackground(withCover);
       } else {
         alert("Metadata not found for this ISBN. Please enter details manually.");
       }
@@ -221,8 +319,12 @@ export const CatalogManager = () => {
         const cleaned = Object.fromEntries(
           Object.entries(matches[0]).filter(([, v]) => v !== undefined && v !== null && v !== '')
         ) as Partial<Book>;
-        const merged = await withWebSynopsis({ ...newBook, ...cleaned });
-        setNewBook(merged);
+        const draft = { ...newBook, ...cleaned };
+        lastAutoLookupRef.current = sanitizeIsbn(draft.isbn);
+        setNewBook(draft);
+        const cover = await resolveCover(draft);
+        const withCover = isRealCover(cover) ? { ...draft, coverUrl: cover } : draft;
+        enrichDraftInBackground(withCover);
       } else {
         alert("No metadata found for this title. Please enter details manually.");
       }
@@ -232,6 +334,24 @@ export const CatalogManager = () => {
       setIsSearching(false);
     }
   };
+
+  // Auto-search on scan. A USB barcode scanner types the whole ISBN in a burst
+  // (and usually finishes with Enter), so as soon as the field holds a complete
+  // ISBN-10/13 we run the lookup ourselves — no reaching for the search button
+  // mid-scan. The short debounce lets the burst finish and stops a hand-typed
+  // ISBN from firing on every intermediate keystroke.
+  // Deliberately skipped while editing an existing record: re-looking-up a book
+  // already in the catalogue would overwrite the librarian's own corrections.
+  useEffect(() => {
+    if (!isAdding || editingBook || isSearching) return;
+    const isbn = sanitizeIsbn(newBook.isbn);
+    if (!isCompleteIsbn(isbn) || isbn === lastAutoLookupRef.current) return;
+    const timer = setTimeout(() => { void handleIsbnLookup(isbn); }, 350);
+    return () => clearTimeout(timer);
+    // handleIsbnLookup is deliberately not a dependency: it is recreated every
+    // render, so depending on it would re-arm the timer continuously. The ISBN
+    // value is the only real trigger.
+  }, [newBook.isbn, isAdding, editingBook, isSearching]);
 
   const handleAutoBarcode = async () => {
     setIsSearching(true);
@@ -289,6 +409,11 @@ export const CatalogManager = () => {
       
       // Close modal and clear data ONLY after successful save
       setIsAdding(false);
+      // Drop any in-flight background enrichment and the scan guard, so the next
+      // book starts clean and re-scanning this ISBN searches again.
+      enrichSeqRef.current++;
+      setIsEnriching(false);
+      lastAutoLookupRef.current = '';
       setNewBook({
         title: '', author: '', series: '', isbn: '', barcode: '', category: 'Fiction',
         description: '', publisher: '', publishedYear: new Date().getFullYear(),
@@ -391,13 +516,44 @@ export const CatalogManager = () => {
     return () => clearTimeout(t);
   }, [notice]);
 
-  // When the Add/Edit form opens, scroll it into view and focus the title so
-  // the librarian lands directly on the field they want to change.
+  // Live map of who currently has each book out, keyed by bookId, so an
+  // issued-out book can show the borrower's name in the catalogue.
+  useEffect(() => {
+    const q = query(collection(db, 'loans'), where('status', '==', 'active'));
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string, Loan[]> = {};
+      snap.docs.forEach(d => {
+        const loan = { id: d.id, ...d.data() } as Loan;
+        if (!loan.bookId) return;
+        if (!map[loan.bookId]) map[loan.bookId] = [];
+        map[loan.bookId].push(loan);
+      });
+      setActiveLoansByBook(map);
+    }, (err) => console.error('Active-loans listener error:', err));
+    return () => unsub();
+  }, []);
+
+  // Compact "Borrowed by …" label for a book's active loans (names of holders).
+  const borrowersLabel = (bookId: string): string | null => {
+    const loans = activeLoansByBook[bookId];
+    if (!loans || loans.length === 0) return null;
+    const names = loans.map(l => (l.userName || 'Unknown').trim()).filter(Boolean);
+    if (names.length === 0) return null;
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return `${names[0]}, ${names[1]}`;
+    return `${names[0]}, ${names[1]} +${names.length - 2}`;
+  };
+
+  // When the Add/Edit form opens, scroll it into view and focus the field the
+  // librarian is about to use: the ISBN box for a new title (so a barcode scan
+  // lands straight in it and auto-searches), the title when editing an existing
+  // record, where the ISBN is already known.
   useEffect(() => {
     if (!isAdding) return;
     const t = setTimeout(() => {
       formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      titleInputRef.current?.focus();
+      if (editingBook) titleInputRef.current?.focus();
+      else isbnInputRef.current?.focus();
     }, 50);
     return () => clearTimeout(t);
   }, [isAdding, editingBook]);
@@ -728,6 +884,11 @@ export const CatalogManager = () => {
             onClick={() => {
               setIsAdding(!isAdding);
               if (isAdding) setEditingBook(null);
+              // Fresh form — forget the last scan so re-scanning the same ISBN
+              // (e.g. cataloguing a second copy) searches again.
+              lastAutoLookupRef.current = '';
+              enrichSeqRef.current++;
+              setIsEnriching(false);
             }}
             className={cn(
               "flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider",
@@ -756,14 +917,24 @@ export const CatalogManager = () => {
                     <div className="relative flex-1">
                       <BookIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
                       <input
-                        placeholder="ISBN-10 or ISBN-13 (optional)"
-                        className="w-full pl-9 pr-3 py-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald font-mono" 
+                        ref={isbnInputRef}
+                        placeholder="Scan or type ISBN-10 / ISBN-13"
+                        className="w-full pl-9 pr-3 py-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald font-mono"
                         value={newBook.isbn} onChange={e => setNewBook({...newBook, isbn: e.target.value})}
+                        // Barcode scanners terminate with Enter. Without this it
+                        // submits the form and saves a half-empty record instead
+                        // of running the lookup.
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void handleIsbnLookup();
+                          }
+                        }}
                       />
                     </div>
-                    <button 
+                    <button
                       type="button"
-                      onClick={handleIsbnLookup}
+                      onClick={() => handleIsbnLookup()}
                       disabled={isSearching}
                       className="p-3 bg-zera-emerald text-white rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity shadow-sm"
                     >
@@ -793,12 +964,24 @@ export const CatalogManager = () => {
                     </button>
                   </div>
                 </div>
-                <p className="text-[9px] font-bold text-zera-emerald uppercase tracking-tighter">Metadata sync enabled via ISBN lookup</p>
+                {isEnriching ? (
+                  <p className="flex items-center gap-1.5 text-[9px] font-bold text-zera-emerald uppercase tracking-tighter">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Fetching synopsis &amp; Lexile in the background — you can keep editing
+                  </p>
+                ) : (
+                  <p className="text-[9px] font-bold text-zera-emerald uppercase tracking-tighter">Scan a barcode to search automatically — no need to press the button</p>
+                )}
              </div>
              
              <div className="aspect-[3/4] bg-natural-bg rounded-2xl overflow-hidden relative border-2 border-dashed border-natural-border flex items-center justify-center">
                {newBook.coverUrl ? (
                  <img src={newBook.coverUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400'; }} />
+               ) : isSearching ? (
+                 <div className="text-center p-6 text-zera-emerald">
+                   <Loader2 className="w-10 h-10 mx-auto mb-2 animate-spin" />
+                   <p className="text-[10px] font-bold uppercase tracking-widest">Finding Cover…</p>
+                 </div>
                ) : (
                  <div className="text-center p-6 grayscale opacity-20">
                    <BookIcon className="w-12 h-12 mx-auto mb-2" />
@@ -1192,6 +1375,12 @@ export const CatalogManager = () => {
                      )}>
                        {book.availableCopies > 0 ? "In Stacks" : "Issued Out"}
                      </span>
+                     {borrowersLabel(book.id) && (
+                       <span className="text-[9px] font-bold text-natural-muted uppercase tracking-wide flex items-center gap-1" title="Currently borrowed by">
+                         <User className="w-3 h-3 shrink-0 text-zera-emerald" />
+                         <span className="truncate max-w-[10rem]">{borrowersLabel(book.id)}</span>
+                       </span>
+                     )}
                   </div>
                 </td>
                 <td className="px-8 py-5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -1298,6 +1487,24 @@ export const CatalogManager = () => {
                 <h2 className="text-3xl lg:text-4xl font-serif font-black text-zera-emerald leading-tight">{selectedBookForView.title}</h2>
                 {selectedBookForView.author?.trim() && <p className="text-lg font-bold text-natural-muted italic">By {selectedBookForView.author}</p>}
               </div>
+
+              {(activeLoansByBook[selectedBookForView.id]?.length || 0) > 0 && (
+                <div className="bg-red-50/60 border border-red-100 rounded-[24px] p-5">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-red-500 mb-3 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5" /> Currently borrowed by
+                  </p>
+                  <div className="space-y-2">
+                    {activeLoansByBook[selectedBookForView.id].map(loan => (
+                      <div key={loan.id} className="flex items-center justify-between gap-3 bg-white rounded-xl border border-red-100 px-4 py-2.5">
+                        <span className="text-sm font-bold text-natural-text truncate">{loan.userName || 'Unknown member'}</span>
+                        {formatDateAdded(loan.dueDate) && (
+                          <span className="text-[10px] font-black uppercase tracking-widest text-natural-muted shrink-0">Due {formatDateAdded(loan.dueDate)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 bg-natural-bg p-6 rounded-[24px] border border-natural-border shadow-inner">
                 <div className="flex items-start gap-3">
