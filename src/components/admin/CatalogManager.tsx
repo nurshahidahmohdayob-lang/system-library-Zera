@@ -427,6 +427,38 @@ export const CatalogManager = () => {
       setSaving(false);
     }
   };
+  // A catalogue search that found nothing is the moment the librarian discovers
+  // the book isn't on the shelf list yet — so open the Add form right there,
+  // already carrying what they typed rather than making them retype it.
+  //
+  // Where the term lands depends on what it looks like: a complete ISBN goes in
+  // the ISBN box, where the scan watcher picks it up and runs the metadata
+  // lookup on its own, so the record is half-filled before they touch anything.
+  // An accession number goes in the accession field, and anything else is a title.
+  const startAddFromSearch = () => {
+    const term = searchTerm.trim();
+    const isAccession = /^zera(student|staff)?\d+$/i.test(term);
+    const isbn = sanitizeIsbn(term);
+    const asIsbn = !isAccession && isCompleteIsbn(isbn);
+
+    setEditingBook(null);
+    // Fresh draft — clear the scan guard so the prefilled ISBN is looked up.
+    lastAutoLookupRef.current = '';
+    enrichSeqRef.current++;
+    setIsEnriching(false);
+    setNewBook({
+      title: asIsbn || isAccession ? '' : term,
+      author: '', series: '',
+      isbn: asIsbn ? isbn : '',
+      barcode: isAccession ? term : '',
+      category: 'Fiction', description: '', publisher: '',
+      publishedYear: new Date().getFullYear(), language: 'English',
+      pageCount: 0, dimensions: '', lexileLevel: '',
+      totalCopies: 1, availableCopies: 1, coverUrl: '', assignedTeacher: ''
+    });
+    setIsAdding(true);
+  };
+
   const startEdit = (book: Book) => {
     setEditingBook(book);
     setNewBook({
@@ -1155,29 +1187,47 @@ export const CatalogManager = () => {
 
       {/* Search the catalogue */}
       <div className="bg-white p-3 rounded-3xl border border-natural-border shadow-sm">
-        <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted pointer-events-none" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={e => { setSearchTerm(e.target.value); setPage(1); }}
-            placeholder="Search the catalogue by title, author, ISBN, accession no. or category…"
-            className="w-full pl-11 pr-28 py-3 bg-natural-bg/50 border border-natural-border rounded-2xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-zera-emerald transition-all"
-          />
-          {searchTerm.trim() && (
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-              <span className="text-[10px] font-black text-zera-emerald uppercase tracking-widest whitespace-nowrap">
-                {displayBooks.length} found
-              </span>
-              <button
-                type="button"
-                onClick={() => { setSearchTerm(''); setPage(1); }}
-                title="Clear search"
-                className="text-natural-muted hover:text-rose-500 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => { setSearchTerm(e.target.value); setPage(1); }}
+              placeholder="Search the catalogue by title, author, ISBN, accession no. or category…"
+              className="w-full pl-11 pr-28 py-3 bg-natural-bg/50 border border-natural-border rounded-2xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-zera-emerald transition-all"
+            />
+            {searchTerm.trim() && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                <span className={cn(
+                  "text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
+                  displayBooks.length === 0 ? "text-rose-500" : "text-zera-emerald"
+                )}>
+                  {displayBooks.length} found
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { setSearchTerm(''); setPage(1); }}
+                  title="Clear search"
+                  className="text-natural-muted hover:text-rose-500 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+          {/* Nothing on the shelf list matched — the book almost certainly needs
+              cataloguing, so the shortcut sits right beside the search box. */}
+          {searchTerm.trim() && displayBooks.length === 0 && !isAdding && (
+            <button
+              type="button"
+              onClick={startAddFromSearch}
+              title={`Catalogue “${searchTerm.trim()}” as a new book`}
+              className="shrink-0 flex items-center gap-2 px-5 py-3 bg-zera-emerald text-white hover:bg-zera-emerald-dark rounded-2xl text-xs font-black uppercase tracking-widest shadow-md transition-all animate-in fade-in slide-in-from-right-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Add this book</span>
+            </button>
           )}
         </div>
       </div>
@@ -1428,11 +1478,39 @@ export const CatalogManager = () => {
         )}
         
         {!loading && paginatedBooks.length === 0 && (
-          <div className="p-32 text-center text-natural-muted font-serif italic text-xl opacity-30">
-            {searchTerm.trim()
-              ? `No books match “${searchTerm.trim()}”.`
-              : 'Inventory records empty for this section.'}
-          </div>
+          searchTerm.trim() ? (
+            // Not in the catalogue — offer to add it on the spot instead of
+            // making the librarian find the Add button and retype the term.
+            <div className="p-20 sm:p-24 text-center flex flex-col items-center gap-5">
+              <div className="w-16 h-16 rounded-2xl bg-natural-bg border-2 border-dashed border-natural-border flex items-center justify-center">
+                <BookIcon className="w-7 h-7 text-natural-muted opacity-40" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-natural-muted font-serif italic text-xl opacity-60">
+                  No books match “{searchTerm.trim()}”.
+                </p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-natural-muted/70">
+                  {isAdding ? 'Registration form open above.' : 'Not catalogued yet? Register it now.'}
+                </p>
+              </div>
+              {/* Hidden while the form is open — the registration is already
+                  under way, and a second live Add button would reset the draft. */}
+              {!isAdding && (
+                <button
+                  type="button"
+                  onClick={startAddFromSearch}
+                  className="flex items-center gap-2 px-7 py-3 bg-zera-emerald text-white hover:bg-zera-emerald-dark rounded-full text-sm font-bold shadow-md hover:shadow-lg transition-all uppercase tracking-wider"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add “{searchTerm.trim().length > 32 ? `${searchTerm.trim().slice(0, 32)}…` : searchTerm.trim()}”
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="p-32 text-center text-natural-muted font-serif italic text-xl opacity-30">
+              Inventory records empty for this section.
+            </div>
+          )
         )}
       </div>
       {notice && (
