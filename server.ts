@@ -968,6 +968,139 @@ export async function createApiApp() {
     return '';
   };
 
+  /**
+   * Library of Congress Z39.50 / SRU lookup.
+   *
+   * This has to be proxied rather than called from the browser: the LOC SRU
+   * service is plain HTTP on port 210 with no TLS equivalent, so a page served
+   * over HTTPS cannot reach it at all (mixed content).
+   *
+   * The endpoint is `http://lx2.loc.gov:210/lcdb` with Bath-profile indexes
+   * (`bath.isbn`, `dc.title`, `dc.author`) — NOT the `/master/sru/resources`
+   * + `bf.isbn` + `recordSchema=bibframe` combination this app used to call,
+   * which 404s on every single request. That is why "Z39.50" never once
+   * returned a record: the failure was silently swallowed by the catch.
+   */
+  const lookupLibraryOfCongress = async (
+    isbn: string,
+    title: string,
+    author: string
+  ): Promise<Record<string, unknown> | null> => {
+    const SRU = 'http://lx2.loc.gov:210/lcdb';
+    const cleanIsbn = (isbn || '').replace(/[^0-9X]/gi, '');
+
+    const sru = async (query: string): Promise<string> => {
+      const url = `${SRU}?version=1.1&operation=searchRetrieve&query=${encodeURIComponent(query)}&maximumRecords=1&recordSchema=mods`;
+      if (isHostDown(url)) return '';
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const r = await fetch(url, { signal: controller.signal });
+        if (r.status === 429 || r.status >= 500) noteHostFailure(url);
+        else noteHostSuccess(url);
+        if (!r.ok) return '';
+        return await r.text();
+      } catch {
+        noteHostFailure(url);
+        return '';
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const one = (xml: string, tag: string): string => {
+      const m = xml.match(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`));
+      return m ? m[1].trim() : '';
+    };
+    const all = (xml: string, tag: string): string[] =>
+      [...xml.matchAll(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'g'))].map(m => m[1].trim());
+
+    const block = (xml: string, tag: string): string => {
+      const m = xml.match(new RegExp(`<${tag}[^>]*>[\\s\\S]*?</${tag}>`));
+      return m ? m[0] : '';
+    };
+
+    /**
+     * MODS records catalogue names in inverted form ("Hemingway, Ernest,").
+     * Every other source in this app supplies natural order, so flip it —
+     * but only for a plain "Surname, Forenames": a corporate body or a name
+     * with more than one comma is left exactly as catalogued.
+     */
+    const naturalName = (raw: string): string => {
+      const name = raw.replace(/[,.]+$/, '').trim();
+      const parts = name.split(',');
+      if (parts.length !== 2) return name;
+      const [surname, forenames] = parts.map(p => p.trim());
+      if (!surname || !forenames) return name;
+      return `${forenames} ${surname}`;
+    };
+
+    const parse = (xml: string) => {
+      if (!xml) return null;
+      const count = parseInt(one(xml, 'zs:numberOfRecords') || '0', 10);
+      if (!count) return null;
+
+      // Title lives in <titleInfo> split across <nonSort> ("The ") and <title>,
+      // so reading <title> alone drops the leading article.
+      const titleInfo = block(xml, 'titleInfo');
+      const recordTitle = `${one(titleInfo, 'nonSort')} ${one(titleInfo, 'title')}`.replace(/\s+/g, ' ').trim();
+      if (!recordTitle) return null;
+
+      // The personal-name block carries the author; its type="date" namePart is
+      // the birth/death range, not part of the name.
+      const nameBlock = xml.match(/<name[^>]*type="personal"[\s\S]*?<\/name>/)?.[0] || '';
+      const personal = all(nameBlock, 'namePart').filter(n => !/^\d{4}|^\d+-/.test(n))[0] || '';
+
+      // Publisher sits under <originInfo><agent><namePart>, not a <publisher> tag.
+      const originInfo = block(xml, 'originInfo');
+      const publisher = one(block(originInfo, 'agent'), 'namePart') || one(xml, 'publisher') || '';
+
+      const identifiers = all(xml, 'identifier');
+      const year = parseInt(one(originInfo, 'dateIssued') || one(xml, 'dateIssued') || '', 10);
+
+      return {
+        isbn: identifiers.find(i => /^(97[89])?\d{9}[\dX]$/i.test(i.replace(/[^0-9X]/gi, ''))) || cleanIsbn,
+        title: recordTitle,
+        author: personal ? naturalName(personal) : (author || 'Unknown Author'),
+        publisher: publisher.replace(/[,.]+$/, '').trim(),
+        publishedYear: Number.isFinite(year) && year > 1000 ? year : undefined,
+        source: 'Z39.50 (Library of Congress)'
+      };
+    };
+
+    // 1. Exact ISBN. LOC's index is real but not exhaustive — it holds the
+    //    editions LOC catalogued, so a recent overseas printing can be absent
+    //    even when the work itself is present.
+    if (cleanIsbn.length === 10 || cleanIsbn.length === 13) {
+      const hit = parse(await sru(`bath.isbn=${cleanIsbn}`));
+      if (hit) return hit;
+    }
+
+    // 2. Title (+author) — catches exactly those other-edition cases.
+    if (title && title.trim()) {
+      const q = author && author.trim()
+        ? `dc.title="${title.trim()}" and dc.author="${author.trim().split(',')[0]}"`
+        : `dc.title="${title.trim()}"`;
+      const hit = parse(await sru(q));
+      if (hit) return hit;
+    }
+
+    return null;
+  };
+
+  app.get('/api/v1/loc', async (req, res) => {
+    const { isbn, title, author } = req.query;
+    if (!isbn && !title) {
+      return res.status(400).json({ error: 'isbn or title is required' });
+    }
+    const record = await lookupLibraryOfCongress(
+      typeof isbn === 'string' ? isbn : '',
+      typeof title === 'string' ? title : '',
+      typeof author === 'string' ? author : ''
+    );
+    res.json({ record });
+  });
+
   app.get('/api/v1/cover', async (req, res) => {
     const { title, author, isbn } = req.query;
     if (!title && !isbn) {
@@ -1151,21 +1284,24 @@ export async function createApiApp() {
             }
           }
 
-          // C. Try LOC (Library of Congress) SRU Z39.50 Gateway
-          if (!fetchedDesc || fetchedDesc.trim().length === 0) {
+          // C. Try LOC (Library of Congress) SRU Z39.50 Gateway.
+          // Goes through lookupLibraryOfCongress, which knows the real endpoint
+          // (http://lx2.loc.gov:210/lcdb, Bath indexes) — the URL previously
+          // used here 404'd on every request, so this branch never once fired.
+          if (!fetchedPublisher || !fetchedAuthors || !fetchedYear) {
             try {
-              const res = await fetchWithTimeout(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${cleanIsbn}&maximumRecords=1&recordSchema=bibframe`);
-              if (res.ok) {
-                const xml = await res.text();
-                const tMatch = xml.match(/<title[^>]*>([^<]+)<\/title>/);
-                const aMatch = xml.match(/<label[^>]*>([^<]+)<\/label>/);
-                if (tMatch) {
-                  fetchedPublisher = 'Library of Congress Z39.50';
-                  if (aMatch && !fetchedAuthors) {
-                    fetchedAuthors = aMatch[1].trim();
-                  }
-                  sourceUsed = 'Library of Congress SRU (Z39.50)';
+              const loc = await lookupLibraryOfCongress(cleanIsbn, title, a || '');
+              if (loc) {
+                if (!fetchedPublisher && typeof loc.publisher === 'string' && loc.publisher) {
+                  fetchedPublisher = loc.publisher;
                 }
+                if (!fetchedAuthors && typeof loc.author === 'string' && loc.author) {
+                  fetchedAuthors = loc.author;
+                }
+                if (!fetchedYear && typeof loc.publishedYear === 'number') {
+                  fetchedYear = loc.publishedYear;
+                }
+                sourceUsed = 'Library of Congress SRU (Z39.50)';
               }
             } catch (err) {
               console.log("[WorldCatalog] Z39.50 Library of Congress query bypassed or unavailable.");

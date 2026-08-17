@@ -447,22 +447,18 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
 
   try {
     // Faster parallel lookup strategy
+    // Library of Congress Z39.50, via the server proxy. It cannot be called
+    // from here directly: LOC's SRU service is plain HTTP on port 210 with no
+    // TLS equivalent, so the browser blocks it as mixed content on any HTTPS
+    // deployment. (The URL this used to call — /master/sru/resources with
+    // bf.isbn and recordSchema=bibframe — does not exist and 404'd on every
+    // book, which is why Z39.50 never returned anything.)
     const searchLOC = async () => {
-      const res = await fetchWithTimeout(`https://lx2.loc.gov/master/sru/resources?version=1.1&operation=searchRetrieve&query=bf.isbn=${sanitizedIsbn}&maximumRecords=1&recordSchema=bibframe`);
+      const res = await fetchWithTimeout(`/api/v1/loc?isbn=${encodeURIComponent(sanitizedIsbn)}`, 8000);
       if (!res.ok) throw new Error();
-      const xml = await res.text();
-      const t = xml.match(/<title[^>]*>([^<]+)<\/title>/);
-      const a = xml.match(/<label[^>]*>([^<]+)<\/label>/);
-      if (!t) throw new Error();
-      const result = { 
-        isbn: sanitizedIsbn, 
-        title: t[1].trim(), 
-        author: a ? a[1].trim() : 'Unknown Author',
-        publisher: 'LOC Indexed',
-        category: 'Library Record',
-        source: 'Z39.50 (LOC)'
-      } as any;
-      return result;
+      const data = await res.json();
+      if (!data?.record?.title) throw new Error();
+      return { category: 'Library Record', ...data.record } as any;
     };
 
     const searchGoogle = async () => {
