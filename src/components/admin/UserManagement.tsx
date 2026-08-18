@@ -36,10 +36,12 @@ import {
   Barcode as BarcodeIcon,
   Sparkles,
   Printer,
-  Download
+  Download,
+  Users
 } from 'lucide-react';
 import { cn, clean } from '@/src/lib/utils';
 import { format } from 'date-fns';
+import { MemberDuplicates } from './MemberDuplicates';
 import { BarcodeService, BarcodeType } from '@/src/services/BarcodeService';
 import { StudentSync } from '@/src/components/admin/StudentSync';
 import { StaffSync } from '@/src/components/admin/StaffSync';
@@ -112,6 +114,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Duplicate-cleanup panel. Deleting /users needs an admin session, so this is
+  // the only place the redundant records can actually be removed from.
+  const [showDuplicates, setShowDuplicates] = useState(false);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -507,6 +512,15 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
             )}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowDuplicates(true)}
+          title="Find members that exist more than once"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider bg-zera-yellow text-zera-emerald-dark hover:brightness-95"
+        >
+          <Users className="w-4 h-4" />
+          Duplicates
+        </button>
         <button 
           onClick={() => {
             if (!isAdding) {
@@ -523,6 +537,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
           {isAdding ? 'Cancel' : `Add New ${roleFilter ? roleFilter.charAt(0).toUpperCase() + roleFilter.slice(1) : 'Member'}`}
         </button>
       </div>
+
+      {showDuplicates && <MemberDuplicates onClose={() => setShowDuplicates(false)} />}
 
       {roleFilter === 'student' && <StudentSync />}
       {roleFilter === 'teacher' && <StaffSync />}
