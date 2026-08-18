@@ -14,7 +14,7 @@ import {
   Upload
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
-import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, orderBy, QueryDocumentSnapshot } from 'firebase/firestore';
+import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, getDoc, orderBy, DocumentSnapshot } from 'firebase/firestore';
 import { Book as BookType, UserProfile, Loan } from '@/src/types';
 import { format, addDays, addMonths } from 'date-fns';
 import { cn } from '@/src/lib/utils';
@@ -43,6 +43,13 @@ export const CirculationDashboard = () => {
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [barcode, setBarcode] = useState('');
   const [bookResults, setBookResults] = useState<BookType[]>([]);
+  // An ISBN identifies a *title*, not a physical book: "Duplicate" creates a
+  // separate catalogue record per copy, each with its own accession number but
+  // the same ISBN. So when a scan matches more than one record the librarian
+  // picks which copy is actually going out, instead of the system silently
+  // issuing whichever one Firestore happened to return first — which is how a
+  // teacher could walk off with Zera41 while the loan was recorded against Zera40.
+  const [copyChoices, setCopyChoices] = useState<BookType[]>([]);
   const [isSearchingBooks, setIsSearchingBooks] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,10 +85,51 @@ export const CirculationDashboard = () => {
     fetchUsers();
   }, []);
 
+  /**
+   * Every catalogue record carrying this ISBN.
+   *
+   * Queried directly rather than filtered out of the suggestion batch above:
+   * that batch is capped at 50 records and restricted to status 'available', so
+   * a copy further down the catalogue — or one whose record status differs —
+   * would be missing from the chooser, and the librarian would be picking from
+   * an incomplete list without knowing it.
+   *
+   * ISBNs are stored however the metadata source supplied them, so the exact
+   * match is tried first and a digits-only comparison catches hyphenated forms.
+   */
+  const findCopiesByIsbn = async (isbnDigits: string): Promise<BookType[]> => {
+    const byId = new Map<string, BookType>();
+    try {
+      const exact = await getDocs(query(collection(db, 'books'), where('isbn', '==', isbnDigits)));
+      exact.docs.forEach(d => byId.set(d.id, { id: d.id, ...d.data() } as BookType));
+
+      // Only sweep the whole collection when the indexed query found nothing,
+      // which means the stored ISBN is punctuated differently from the scan.
+      // Doing it whenever the query returned a single hit would put a
+      // full-catalogue read behind every ordinary one-copy scan.
+      if (byId.size === 0) {
+        const all = await getDocs(collection(db, 'books'));
+        all.docs.forEach(d => {
+          const data = d.data() as BookType;
+          if ((data.isbn || '').replace(/[^0-9Xx]/gi, '') === isbnDigits) {
+            byId.set(d.id, { id: d.id, ...data } as BookType);
+          }
+        });
+      }
+    } catch (err) {
+      console.error('Copy lookup by ISBN failed:', err);
+    }
+    // Show them in accession order so the list reads the way the shelf does.
+    return [...byId.values()].sort((a, b) =>
+      (a.barcode || '').localeCompare(b.barcode || '', undefined, { numeric: true })
+    );
+  };
+
   useEffect(() => {
     const searchBooks = async () => {
       if (barcode.length < 2 || barcode.includes('ZERA-')) {
         setBookResults([]);
+        setCopyChoices([]);
         lastScanRef.current = ''; // field cleared → allow the same code to be scanned again
         return;
       }
@@ -100,16 +148,29 @@ export const CirculationDashboard = () => {
 
         const scan = barcode.trim();
         const scanDigits = scan.replace(/[^0-9Xx]/gi, '');
-        // A scanner sends the whole code at once — if it exactly matches a book's
-        // barcode or ISBN, issue it immediately (no button press needed).
-        const exact = allBooks.find(b =>
-          (b.barcode && b.barcode.toLowerCase() === scan.toLowerCase()) ||
-          (b.isbn && scanDigits.length >= 10 && b.isbn.replace(/[^0-9Xx]/gi, '') === scanDigits)
-        );
-        if (exact && selectedUser && lastScanRef.current !== scan) {
-          lastScanRef.current = scan;
+        const isIsbnScan = scanDigits.length === 10 || scanDigits.length === 13;
+
+        // An accession number is unique to one physical book, so it stays
+        // unambiguous. An ISBN is not — every copy shares it.
+        const byAccession = allBooks.filter(b => b.barcode && b.barcode.toLowerCase() === scan.toLowerCase());
+        const byIsbn = isIsbnScan ? await findCopiesByIsbn(scanDigits) : [];
+        const exactMatches = byAccession.length > 0 ? byAccession : byIsbn;
+
+        if (exactMatches.length > 0 && selectedUser && lastScanRef.current !== scan) {
+          // Exactly one record — nothing to disambiguate, so keep the instant
+          // issue that makes the desk workflow fast.
+          if (exactMatches.length === 1) {
+            lastScanRef.current = scan;
+            setBookResults([]);
+            setCopyChoices([]);
+            handleTransaction('checkout');
+            return;
+          }
+          // Several copies share this code — stop and let the librarian say
+          // which one is in their hand. Deliberately does NOT set lastScanRef,
+          // so re-scanning still works if they clear and start over.
           setBookResults([]);
-          handleTransaction('checkout');
+          setCopyChoices(exactMatches);
           return;
         }
 
@@ -127,6 +188,7 @@ export const CirculationDashboard = () => {
         ).slice(0, 5);
 
         setBookResults(filtered);
+        setCopyChoices([]);
       } catch (err) {
         console.error("Book search error:", err);
       } finally {
@@ -193,7 +255,18 @@ export const CirculationDashboard = () => {
     setBookResults([]);
   };
 
-  const handleTransaction = async (type: 'checkout') => {
+  // Issue one specific copy the librarian picked out of the chooser. Goes by
+  // document id, not by re-resolving the barcode text — resolving a shared ISBN
+  // back to a record is exactly the ambiguity the chooser exists to settle.
+  const issueChosenCopy = (book: BookType) => {
+    setCopyChoices([]);
+    setBookResults([]);
+    setBarcode(book.barcode || book.isbn || '');
+    lastScanRef.current = (book.barcode || book.isbn || '').trim();
+    handleTransaction('checkout', book.id);
+  };
+
+  const handleTransaction = async (type: 'checkout', forcedBookId?: string) => {
     if (!selectedUser || !barcode) {
       setStatus({ type: 'error', message: 'Please select a member and enter a book barcode.' });
       return;
@@ -237,25 +310,53 @@ export const CirculationDashboard = () => {
         ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
         : raw;
 
-      // Search by barcode first, then isbn, then title.
-      let bookDoc: QueryDocumentSnapshot | null = null;
-      let snap = await getDocs(query(collection(db, 'books'), where('barcode', '==', normalized)));
-      if (!snap.empty) bookDoc = snap.docs[0];
-
-      if (!bookDoc) {
-        snap = await getDocs(query(collection(db, 'books'), where('isbn', '==', raw)));
-        if (!snap.empty) bookDoc = snap.docs[0];
+      // The Issue button and the Enter key reach this without going through the
+      // scan effect, so the same "don't guess between copies" rule is enforced
+      // here too — otherwise either one would quietly issue an arbitrary copy.
+      if (!forcedBookId) {
+        const rawDigits = raw.replace(/[^0-9Xx]/gi, '');
+        if (rawDigits.length === 10 || rawDigits.length === 13) {
+          const copies = await findCopiesByIsbn(rawDigits);
+          if (copies.length > 1) {
+            setCopyChoices(copies);
+            setStatus({
+              type: 'error',
+              message: `${copies.length} copies share this ISBN — choose which one you are handing over.`
+            });
+            setLoading(false);
+            return;
+          }
+        }
       }
 
-      if (!bookDoc) {
-        snap = await getDocs(query(collection(db, 'books'), where('title', '==', raw)));
-        if (!snap.empty) bookDoc = snap.docs[0];
-      }
+      let bookDoc: DocumentSnapshot | null = null;
 
-      // Last resort: case-insensitive barcode scan (covers any unusual stored casing).
-      if (!bookDoc) {
-        const all = await getDocs(collection(db, 'books'));
-        bookDoc = all.docs.find(d => (d.data().barcode || '').toLowerCase() === raw.toLowerCase()) || null;
+      if (forcedBookId) {
+        // The librarian already chose this exact copy from the chooser — take it
+        // as given rather than resolving the text in the box, which for a shared
+        // ISBN would land back on an arbitrary copy.
+        const chosen = await getDoc(doc(db, 'books', forcedBookId));
+        if (chosen.exists()) bookDoc = chosen;
+      } else {
+        // Search by barcode first, then isbn, then title.
+        let snap = await getDocs(query(collection(db, 'books'), where('barcode', '==', normalized)));
+        if (!snap.empty) bookDoc = snap.docs[0];
+
+        if (!bookDoc) {
+          snap = await getDocs(query(collection(db, 'books'), where('isbn', '==', raw)));
+          if (!snap.empty) bookDoc = snap.docs[0];
+        }
+
+        if (!bookDoc) {
+          snap = await getDocs(query(collection(db, 'books'), where('title', '==', raw)));
+          if (!snap.empty) bookDoc = snap.docs[0];
+        }
+
+        // Last resort: case-insensitive barcode scan (covers any unusual stored casing).
+        if (!bookDoc) {
+          const all = await getDocs(collection(db, 'books'));
+          bookDoc = all.docs.find(d => (d.data().barcode || '').toLowerCase() === raw.toLowerCase()) || null;
+        }
       }
 
       if (!bookDoc) {
@@ -271,8 +372,11 @@ export const CirculationDashboard = () => {
       // accession-numbered records sharing the same ISBN/title). Find one that's
       // actually available and lend that instead, so a second borrower isn't
       // wrongly told "no copies" while a copy sits on the shelf.
-      if ((bookData.availableCopies || 0) <= 0) {
-        const siblingDocs: QueryDocumentSnapshot[] = [];
+      // Skipped when the copy was chosen explicitly: quietly swapping in a
+      // different copy would undo the choice the librarian just made, and the
+      // loan would again name a book that isn't the one on the desk.
+      if (!forcedBookId && (bookData.availableCopies || 0) <= 0) {
+        const siblingDocs: DocumentSnapshot[] = [];
         try {
           if (bookData.isbn && bookData.isbn.trim()) {
             const s = await getDocs(query(collection(db, 'books'), where('isbn', '==', bookData.isbn)));
@@ -362,7 +466,7 @@ export const CirculationDashboard = () => {
         : code;
 
       // Find the book: barcode first, then ISBN, then exact title.
-      let bookDoc: QueryDocumentSnapshot | null = null;
+      let bookDoc: DocumentSnapshot | null = null;
       let bookSnap = await getDocs(query(collection(db, 'books'), where('barcode', '==', normalized)));
       if (!bookSnap.empty) bookDoc = bookSnap.docs[0];
       if (!bookDoc) { bookSnap = await getDocs(query(collection(db, 'books'), where('isbn', '==', code))); if (!bookSnap.empty) bookDoc = bookSnap.docs[0]; }
@@ -446,6 +550,17 @@ export const CirculationDashboard = () => {
       }).slice(0, 50)
     : [];
 
+  // Names appearing more than once in the current results — those rows get an
+  // extra identifying line so they can be told apart.
+  const nameCounts = filteredUsers.reduce<Record<string, number>>((acc, u) => {
+    const key = String(u.name || '').toLowerCase().trim();
+    if (key) acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const duplicateNames = new Set(
+    Object.keys(nameCounts).filter(name => nameCounts[name] > 1)
+  );
+
   return (
     <div className="space-y-8 pb-20">
       <div className="flex justify-between items-end gap-4 flex-wrap">
@@ -518,9 +633,23 @@ export const CirculationDashboard = () => {
                         <div className="w-8 h-8 rounded-full bg-natural-bg flex items-center justify-center border border-natural-border">
                            <User className="w-4 h-4 text-natural-muted" />
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-natural-text">{user.name}</p>
-                          <p className="text-[9px] font-black uppercase text-natural-muted tracking-widest">{user.role} {user.grade && `• Grade ${user.grade}`}</p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-natural-text truncate">{user.name}</p>
+                          <p className="text-[9px] font-black uppercase text-natural-muted tracking-widest truncate">
+                            {user.role}
+                            {user.grade ? ` • Grade ${user.grade}` : ''}
+                            {user.email ? ` • ${user.email}` : ''}
+                          </p>
+                          {/* Two members can share a name AND an email (duplicate
+                              records from repeated sign-ins or staff syncs). Without
+                              something unique on screen the rows are indistinguishable
+                              and the librarian cannot tell which one they are issuing
+                              to — so show the record's own id when the name repeats. */}
+                          {duplicateNames.has(String(user.name || '').toLowerCase().trim()) && (
+                            <p className="text-[9px] font-black uppercase tracking-widest text-amber-600 truncate">
+                              Duplicate name • id {String(user.uid || '').slice(0, 8) || 'n/a'}
+                            </p>
+                          )}
                         </div>
                       </button>
                     ))}
@@ -599,7 +728,74 @@ export const CirculationDashboard = () => {
                 )}
                </div>
 
-               {bookResults.length > 0 && (
+               {/* Several catalogue records share the scanned code — the
+                   librarian says which physical copy is going out. */}
+               {copyChoices.length > 0 && (
+                 <div className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-zera-emerald/40 rounded-2xl shadow-xl z-30 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                   <div className="px-4 py-3 bg-zera-emerald/10 border-b border-zera-emerald/20 flex items-center justify-between gap-3">
+                     <div className="min-w-0">
+                       <p className="text-[10px] font-black uppercase tracking-widest text-zera-emerald">
+                         {copyChoices.length} copies share this code
+                       </p>
+                       <p className="text-[10px] font-bold text-natural-muted truncate">
+                         Choose the copy you are issuing to {selectedUser?.name || 'this member'}.
+                       </p>
+                     </div>
+                     <button
+                       type="button"
+                       onClick={() => { setCopyChoices([]); setBarcode(''); }}
+                       title="Cancel"
+                       className="shrink-0 text-natural-muted hover:text-rose-500 transition-colors"
+                     >
+                       <X className="w-4 h-4" />
+                     </button>
+                   </div>
+                   <div className="divide-y divide-natural-bg max-h-72 overflow-y-auto">
+                     {copyChoices.map(copy => {
+                       const available = (copy.availableCopies || 0) > 0;
+                       return (
+                         <button
+                           key={copy.id}
+                           type="button"
+                           disabled={!available}
+                           onClick={() => issueChosenCopy(copy)}
+                           className={cn(
+                             "w-full p-3 flex items-center gap-3 text-left transition-colors",
+                             available ? "hover:bg-zera-emerald/5" : "opacity-50 cursor-not-allowed"
+                           )}
+                         >
+                           <div className="w-10 h-10 rounded-lg bg-natural-bg overflow-hidden shrink-0 border border-natural-border flex items-center justify-center">
+                             {copy.coverUrl ? (
+                               <img src={copy.coverUrl} alt={copy.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=200'; }} />
+                             ) : (
+                               <Book className="w-4 h-4 text-natural-muted opacity-40" />
+                             )}
+                           </div>
+                           <div className="flex-1 min-w-0">
+                             <p className="text-sm font-bold text-natural-text truncate">{copy.title}</p>
+                             {/* The accession number is the only thing that tells
+                                 these records apart — it is what is printed on
+                                 the physical book's spine label. */}
+                             <p className="text-[10px] font-black uppercase tracking-widest text-zera-emerald truncate">
+                               {copy.barcode || 'No accession no.'}
+                             </p>
+                           </div>
+                           <div className={cn(
+                             "shrink-0 text-[9px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg border whitespace-nowrap",
+                             available
+                               ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                               : "bg-rose-50 text-rose-600 border-rose-200"
+                           )}>
+                             {available ? `${copy.availableCopies} of ${copy.totalCopies || 1} in` : 'All out'}
+                           </div>
+                         </button>
+                       );
+                     })}
+                   </div>
+                 </div>
+               )}
+
+               {bookResults.length > 0 && copyChoices.length === 0 && (
                  <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-natural-border rounded-2xl shadow-xl z-20 overflow-hidden divide-y divide-natural-bg animate-in fade-in slide-in-from-top-2">
                    {bookResults.map(book => (
                      <button 
