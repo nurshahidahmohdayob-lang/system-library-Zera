@@ -23,6 +23,7 @@ import { format, isAfter, parseISO } from 'date-fns';
 import { useAuth, handleFirestoreError, OperationType } from '@/src/hooks/useAuth';
 import { useUserHolds } from '@/src/hooks/useHolds';
 import { HoldService } from '@/src/services/libraryService';
+import { BorrowingPolicy } from './BorrowingPolicy';
 
 interface MemberPortalProps {
   onOpenAuth?: () => void;
@@ -568,6 +569,12 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
           </div>
         </div>
       )}
+
+      {/* Shown whether or not anyone is signed in — the rules apply to every
+          member, and a visitor deciding whether to borrow needs them most. */}
+      <div className="pt-4 border-t border-natural-border">
+        <BorrowingPolicy />
+      </div>
     </div>
   );
 };

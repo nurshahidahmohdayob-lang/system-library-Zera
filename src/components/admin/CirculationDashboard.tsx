@@ -19,6 +19,9 @@ import { Book as BookType, UserProfile, Loan } from '@/src/types';
 import { format, addDays, addMonths } from 'date-fns';
 import { cn } from '@/src/lib/utils';
 import { BatchCirculationImporter } from './BatchCirculationImporter';
+// Loan limits/durations are shared with the Member Portal's policy section so the
+// rule the desk enforces and the rule members are shown can never drift apart.
+import { STUDENT_LOAN_LIMIT, STUDENT_LOAN_DAYS, STAFF_LOAN_MONTHS } from '@/src/lib/borrowingPolicy';
 
 // Loan dates may be ISO strings (new records), Firestore Timestamps, or {seconds}
 // shapes (older/imported records). Parse defensively so a stray value can't crash
@@ -30,12 +33,6 @@ const safeDate = (v: any, fmt: string): string => {
     : (typeof v?.toDate === 'function' ? v.toDate() : (typeof v?.seconds === 'number' ? new Date(v.seconds * 1000) : null));
   return d && !isNaN(d.getTime()) ? format(d, fmt) : '';
 };
-
-// Borrowing policy. Students may hold a limited number of books, due in two
-// weeks; teachers (and other staff) borrow without limit for a full term.
-const STUDENT_LOAN_LIMIT = 3;   // max books a student may have out at once
-const STUDENT_LOAN_DAYS = 14;   // student due date: 2 weeks
-const STAFF_LOAN_MONTHS = 4;    // teacher/staff due date: ~1 term
 
 export const CirculationDashboard = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -683,7 +680,7 @@ export const CirculationDashboard = () => {
                     )}>
                       <User className="w-3.5 h-3.5 shrink-0" />
                       <span>
-                        Student · up to {STUDENT_LOAN_LIMIT} books · due in 2 weeks ·{' '}
+                        Student · up to {STUDENT_LOAN_LIMIT} books · due in {STUDENT_LOAN_DAYS} days ·{' '}
                         {memberLoans.length >= STUDENT_LOAN_LIMIT
                           ? 'limit reached'
                           : `${STUDENT_LOAN_LIMIT - memberLoans.length} left`}
@@ -692,7 +689,7 @@ export const CirculationDashboard = () => {
                   ) : (
                     <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-natural-muted">
                       <User className="w-3.5 h-3.5 shrink-0" />
-                      <span>{selectedUser.role === 'teacher' ? 'Teacher' : 'Staff'} · unlimited · due end of term (~4 months)</span>
+                      <span>{selectedUser.role === 'teacher' ? 'Teacher' : 'Staff'} · unlimited · due end of term (~{STAFF_LOAN_MONTHS} months)</span>
                     </div>
                   )}
                 </div>
