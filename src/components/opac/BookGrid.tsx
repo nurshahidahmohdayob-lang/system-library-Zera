@@ -61,7 +61,19 @@ export const BookGrid = () => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const { profile } = useAuth();
-  const isMember = profile?.role === 'student' || profile?.role === 'teacher';
+  // Anyone signed in may place a hold on their own behalf.
+  //
+  // This used to require role 'student' or 'teacher', which silently locked out
+  // the very people it was meant to serve: useAuth defaults an unrecognised Zera
+  // email to 'admin' (useAuth.tsx, "else role = 'admin'"), so an ordinary teacher
+  // signing in gets an admin profile and was shown "Sign in to Hold" while
+  // already signed in.
+  //
+  // Role is the wrong gate anyway. Ownership is enforced by the security rules,
+  // not by this flag: creating holds/{id} requires
+  // incoming().userId == request.auth.uid, so a member can only ever place a
+  // hold for themselves regardless of what their profile says.
+  const isMember = Boolean(profile);
   const userHolds = useUserHolds(isMember ? profile?.uid : undefined);
   const heldBookIds = new Set(
     userHolds.filter(h => h.status === 'pending' || h.status === 'ready').map(h => h.bookId)

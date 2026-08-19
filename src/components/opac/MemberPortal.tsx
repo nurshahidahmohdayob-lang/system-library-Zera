@@ -41,7 +41,11 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({ onOpenAuth }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (loggedInProfile && (loggedInProfile.role === 'student' || loggedInProfile.role === 'teacher')) {
+    // Any signed-in member sees their own borrowing account. Restricting this to
+    // role 'student'/'teacher' hid the portal from teachers, because signing in
+    // with an unrecognised Zera email yields an 'admin' profile (see useAuth) —
+    // so staff were shown the signed-out search form despite being logged in.
+    if (loggedInProfile) {
       setProfile(loggedInProfile);
     } else {
       setProfile(null);
