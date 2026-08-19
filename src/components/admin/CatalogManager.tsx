@@ -55,6 +55,12 @@ const formatDateAdded = (v: any): string => {
   return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
+/** The subject categories a book may be filed under. */
+const BOOK_CATEGORIES = [
+  'Fiction', 'Non-Fiction', 'Reference', 'Scientific',
+  'History', 'Education', 'Story Book', 'Teacher Resource',
+] as const;
+
 /** Strip hyphens/spaces so a scanned EAN and a typed ISBN compare equal. */
 const sanitizeIsbn = (isbn?: string | null) => (isbn || '').replace(/[^0-9X]/gi, '').toUpperCase();
 
@@ -698,6 +704,47 @@ export const CatalogManager = () => {
     });
   };
 
+  /**
+   * Re-file every selected book under one subject category.
+   *
+   * Reclassifying a class set one record at a time is the kind of job that gets
+   * abandoned half-done, which is how a catalogue ends up with the same set
+   * split across "Fiction" and "Teacher Resource". Only the category changes —
+   * loans, copies and accession numbers are untouched.
+   */
+  const handleRecategoriseSelected = async (category: string) => {
+    if (selectedIds.size === 0 || !category) return;
+    const ids = [...selectedIds];
+    const already = books.filter(b => selectedIds.has(b.id) && b.category === category).length;
+    const changing = ids.length - already;
+    if (changing === 0) {
+      setNotice(`All ${ids.length} selected book${ids.length !== 1 ? 's are' : ' is'} already filed under “${category}”.`);
+      return;
+    }
+    if (!window.confirm(
+      `Re-file ${changing} book${changing !== 1 ? 's' : ''} under “${category}”?` +
+      (already ? `\n\n${already} of the ${ids.length} selected are already in that category and will be left as they are.` : '')
+    )) return;
+
+    setSaving(true);
+    let done = 0;
+    try {
+      for (const id of ids) {
+        const book = books.find(b => b.id === id);
+        if (!book || book.category === category) continue;
+        await updateDoc(doc(db, 'books', id), { category, updatedAt: new Date().toISOString() });
+        done += 1;
+      }
+      setSelectedIds(new Set());
+      setNotice(`${done} book${done !== 1 ? 's' : ''} re-filed under “${category}”.`);
+    } catch (err) {
+      console.error('Bulk recategorise failed:', err);
+      alert(`Re-filed ${done} of ${changing} before failing: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Permanently delete ${selectedIds.size} selected book${selectedIds.size !== 1 ? 's' : ''}? Their copies and loan records will also be removed. This action cannot be undone.`)) {
@@ -804,6 +851,11 @@ export const CatalogManager = () => {
         const haystack = [
           b.title, b.author, b.isbn, b.category, b.publisher, b.assignedTeacher,
           ...(b.subjects || []),
+          // Who currently has it out. Without this there was no way to pull up
+          // "every book Hadifah has" — the catalogue could be searched by what a
+          // book *is* but never by who is holding it, even though that is how a
+          // librarian thinks when reclassifying or chasing a class set.
+          ...(activeLoansByBook[b.id] || []).map(l => l.userName || ''),
         ].filter(Boolean).join(' ').toLowerCase();
         // Every whitespace-separated term must appear (AND search).
         return terms.every(t => haystack.includes(t));
@@ -857,6 +909,18 @@ export const CatalogManager = () => {
           </div>
         </div>
         <div className="flex gap-3">
+          {selectedIds.size > 0 && (
+            <select
+              disabled={saving}
+              value=""
+              onChange={e => { const v = e.target.value; e.target.value = ''; handleRecategoriseSelected(v); }}
+              title="Re-file the selected books under a different subject category"
+              className="px-4 py-2.5 bg-white border border-natural-border rounded-full text-sm font-bold uppercase tracking-wider text-zera-emerald shadow-md cursor-pointer disabled:opacity-50"
+            >
+              <option value="">Set category ({selectedIds.size})…</option>
+              {BOOK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -1086,14 +1150,7 @@ export const CatalogManager = () => {
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text" 
                   value={newBook.category} onChange={e => setNewBook({...newBook, category: e.target.value})}
                 >
-                  <option>Fiction</option>
-                  <option>Non-Fiction</option>
-                  <option>Reference</option>
-                  <option>Scientific</option>
-                  <option>History</option>
-                  <option>Education</option>
-                  <option>Story Book</option>
-                  <option>Teacher Resource</option>
+                  {BOOK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>
               <div className="space-y-2">
@@ -1194,7 +1251,7 @@ export const CatalogManager = () => {
               type="text"
               value={searchTerm}
               onChange={e => { setSearchTerm(e.target.value); setPage(1); }}
-              placeholder="Search the catalogue by title, author, ISBN, accession no. or category…"
+              placeholder="Search by title, author, ISBN, accession no., category, or who has it out…"
               className="w-full pl-11 pr-28 py-3 bg-natural-bg/50 border border-natural-border rounded-2xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-zera-emerald transition-all"
             />
             {searchTerm.trim() && (
