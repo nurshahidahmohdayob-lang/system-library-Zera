@@ -148,7 +148,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
       
       switch (err.code) {
         case 'auth/email-already-in-use':
-          friendlyMessage = 'This email is already registered.';
+          // Most staff who hit this never chose a password: their account was
+          // created the first time they signed in, or by an admin pre-adding
+          // them. Telling them to "sign in instead" strands them, so the block
+          // below also offers a reset link.
+          friendlyMessage = 'This email already has an account, so there is nothing to register. Sign in below — or send yourself a reset link if you have never set a password.';
           setSuggestLogin(true);
           break;
         case 'auth/invalid-email':
@@ -350,17 +354,27 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login' }: { isOpen: boolean
                       <span>{error}</span>
                     </p>
                     {suggestLogin && (
-                      <button 
-                        type="button"
-                        onClick={() => {
-                          setMode('login');
-                          setError('');
-                          setSuggestLogin(false);
-                        }}
-                        className="mt-1.5 text-xs font-black text-zera-emerald hover:underline underline-offset-2 flex items-center gap-1 cursor-pointer"
-                      >
-                        Sign In instead <ChevronRight className="w-3 h-3" />
-                      </button>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode('login');
+                            setError('');
+                            setSuggestLogin(false);
+                          }}
+                          className="text-xs font-black text-zera-emerald hover:underline underline-offset-2 flex items-center gap-1 cursor-pointer"
+                        >
+                          Sign In instead <ChevronRight className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => { setMode('login'); setSuggestLogin(false); handleForgotPassword(); }}
+                          className="text-xs font-black text-zera-emerald hover:underline underline-offset-2 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          Send me a reset link <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
