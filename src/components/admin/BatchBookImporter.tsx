@@ -214,6 +214,8 @@ interface UploadedRow {
   category: string;
   copies: number;
   description?: string;
+  /** Reading measure supplied in the file, e.g. "740L", "AD730L", "500L-700L". */
+  lexile?: string;
 }
 
 interface ImportErrorItem {
@@ -229,17 +231,21 @@ interface ColumnIndices {
   categoryIdx: number;
   copiesIdx: number;
   descriptionIdx: number;
+  lexileIdx: number;
 }
 
 // Guess which column holds which field from the header names. Each header maps
 // to at most one field; later matches win (same as the original inline logic).
 const deriveColumnIndices = (fileHeaders: string[]): ColumnIndices => {
   const idx: ColumnIndices = {
-    titleIdx: -1, authorIdx: -1, isbnIdx: -1, categoryIdx: -1, copiesIdx: -1, descriptionIdx: -1,
+    titleIdx: -1, authorIdx: -1, isbnIdx: -1, categoryIdx: -1, copiesIdx: -1, descriptionIdx: -1, lexileIdx: -1,
   };
   fileHeaders.forEach((h, i) => {
     const lower = h.toLowerCase();
-    if (lower.includes('title') || lower.includes('bookname') || lower.includes('name')) idx.titleIdx = i;
+    // Tested first: a "Lexile"/"Reading Level" header would otherwise be claimed
+    // by the broad 'name'/'cat' matches below.
+    if (lower.includes('lexile') || lower.includes('reading level')) idx.lexileIdx = i;
+    else if (lower.includes('title') || lower.includes('bookname') || lower.includes('name')) idx.titleIdx = i;
     else if (lower.includes('author') || lower.includes('writer')) idx.authorIdx = i;
     else if (lower.includes('isbn') || lower.includes('identifier')) idx.isbnIdx = i;
     else if (lower.includes('cat') || lower.includes('subject')) idx.categoryIdx = i;
@@ -266,6 +272,10 @@ const rowsFromMatrix = (
     const rawCopies = idx.copiesIdx !== -1 ? parseInt(columns[idx.copiesIdx] || '1', 10) : 1;
     const copies = isNaN(rawCopies) || rawCopies < 1 ? 1 : rawCopies;
     const description = idx.descriptionIdx !== -1 ? (columns[idx.descriptionIdx] || '').trim() : '';
+    // "Null" is how the source spreadsheets spell an empty cell; treat it as blank
+    // rather than importing the literal word as a reading measure.
+    const rawLexile = idx.lexileIdx !== -1 ? (columns[idx.lexileIdx] || '').trim() : '';
+    const lexile = /^null$/i.test(rawLexile) ? '' : rawLexile;
 
     if (!title && !isbn) {
       errors.push({
@@ -318,6 +328,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
   const [categoryIdx, setCategoryIdx] = useState<number>(-1);
   const [copiesIdx, setCopiesIdx] = useState<number>(-1);
   const [descriptionIdx, setDescriptionIdx] = useState<number>(-1);
+  const [lexileIdx, setLexileIdx] = useState<number>(-1);
 
   // Live import state
   const [importJobs, setImportJobs] = useState<ActiveJob[]>([]);
@@ -389,6 +400,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
     setRawMatrix(body);
     setTitleIdx(idx.titleIdx); setAuthorIdx(idx.authorIdx); setIsbnIdx(idx.isbnIdx);
     setCategoryIdx(idx.categoryIdx); setCopiesIdx(idx.copiesIdx); setDescriptionIdx(idx.descriptionIdx);
+    setLexileIdx(idx.lexileIdx);
 
     if (idx.titleIdx !== -1 || idx.isbnIdx !== -1) {
       // Confident enough — skip mapping, show the books for confirmation.
@@ -661,7 +673,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
       return;
     }
     const { rows, errors } = rowsFromMatrix(rawMatrix, {
-      titleIdx, authorIdx, isbnIdx, categoryIdx, copiesIdx, descriptionIdx,
+      titleIdx, authorIdx, isbnIdx, categoryIdx, copiesIdx, descriptionIdx, lexileIdx,
     });
     setParsedRows(rows);
     setErrorLogs(errors);
@@ -787,7 +799,9 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           publishedYear: finalYear,
           subjects: finalSubjects,
           pageCount: finalPageCount,
-          lexileLevel: enrichedDetails?.lexileLevel || '',
+          // A measure supplied in the file wins: the librarian curated it for this
+          // exact edition, whereas the web lookup guesses from title/author.
+          lexileLevel: currentJob.row.lexile || enrichedDetails?.lexileLevel || '',
           language: languageToUse,
           totalCopies: currentJob.row.copies,
           availableCopies: currentJob.row.copies,
