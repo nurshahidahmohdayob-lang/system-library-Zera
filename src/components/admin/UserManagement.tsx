@@ -37,7 +37,8 @@ import {
   Sparkles,
   Printer,
   Download,
-  Users
+  Users,
+  History
 } from 'lucide-react';
 import { cn, clean } from '@/src/lib/utils';
 import { format } from 'date-fns';
@@ -117,6 +118,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   // Duplicate-cleanup panel. Deleting /users needs an admin session, so this is
   // the only place the redundant records can actually be removed from.
   const [showDuplicates, setShowDuplicates] = useState(false);
+  // Full borrowing log for the open member, shown on demand.
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -193,6 +196,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   }, [roleFilter, searchTerm]);
 
   const viewUserDetail = async (user: UserProfile) => {
+    // A history window left open from the previous member would show their loans
+    // under this member's name.
+    setShowHistory(false);
     setSelectedUser(user);
     try {
       const q = query(collection(db, 'loans'), where('userId', '==', user.uid), orderBy('checkoutDate', 'desc'));
@@ -540,6 +546,110 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
 
       {showDuplicates && <MemberDuplicates onClose={() => setShowDuplicates(false)} />}
 
+      {/* Full borrowing log for the open member — every loan ever recorded
+          against them, newest first, current and returned together. */}
+      {showHistory && selectedUser && (
+        <div className="fixed inset-0 z-[115] flex items-center justify-center p-4 sm:p-8">
+          <div className="absolute inset-0 bg-zera-emerald/40 backdrop-blur-md" onClick={() => setShowHistory(false)} />
+          <div className="relative w-full max-w-2xl bg-white rounded-[32px] shadow-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95">
+            <div className="p-6 border-b border-natural-border flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-lg font-black text-zera-emerald uppercase tracking-tight truncate">
+                  {selectedUser.name}
+                </h3>
+                <p className="text-[10px] font-bold text-natural-muted uppercase tracking-widest mt-0.5">
+                  {userLoans.filter(l => l.status === 'active').length} still out ·{' '}
+                  {userLoans.filter(l => l.status === 'returned').length} returned ·{' '}
+                  {userLoans.length} borrowed in total
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHistory(false)}
+                title="Close"
+                className="shrink-0 p-2 rounded-xl border border-natural-border text-natural-muted hover:text-rose-500 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {userLoans.length === 0 ? (
+                <div className="py-20 text-center space-y-2">
+                  <History className="w-10 h-10 mx-auto text-natural-muted opacity-25" />
+                  <p className="text-natural-muted font-serif italic text-lg">
+                    {selectedUser.name} has never borrowed a book.
+                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-natural-muted/70">
+                    Nothing recorded against this member
+                  </p>
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse">
+                  <thead className="sticky top-0 bg-natural-bg">
+                    <tr className="text-[9px] font-black uppercase tracking-widest text-natural-muted">
+                      <th className="px-5 py-3">Book</th>
+                      <th className="px-3 py-3 whitespace-nowrap">Borrowed</th>
+                      <th className="px-3 py-3 whitespace-nowrap">Due / Returned</th>
+                      <th className="px-5 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-natural-bg">
+                    {[...userLoans]
+                      .sort((a, b) => String(b.checkoutDate || '').localeCompare(String(a.checkoutDate || '')))
+                      .map(loan => {
+                        const returned = loan.status === 'returned';
+                        const due = parseLoanDate(loan.dueDate);
+                        const overdue = loan.status === 'active' && !!due && due.getTime() < Date.now();
+                        return (
+                          <tr key={loan.id} className="text-sm">
+                            <td className="px-5 py-3 font-bold text-natural-text">{loan.bookTitle || '—'}</td>
+                            <td className="px-3 py-3 text-xs font-medium text-natural-muted whitespace-nowrap">
+                              {fmtLoanDate(loan.checkoutDate) || '—'}
+                            </td>
+                            <td className="px-3 py-3 text-xs font-medium text-natural-muted whitespace-nowrap">
+                              {returned ? (fmtLoanDate(loan.returnDate) || '—') : (fmtLoanDate(loan.dueDate) || '—')}
+                            </td>
+                            <td className="px-5 py-3">
+                              <span className={cn(
+                                'text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border whitespace-nowrap',
+                                overdue ? 'bg-red-500 text-white border-red-600'
+                                  : returned ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : 'bg-amber-400 text-amber-900 border-amber-300'
+                              )}>
+                                {overdue ? 'Overdue' : returned ? 'Returned' : 'Out'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-natural-border bg-natural-bg/50 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handlePrintLoans}
+                disabled={userLoans.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest bg-zera-emerald text-white hover:bg-zera-emerald-dark shadow-sm transition-all disabled:opacity-40"
+              >
+                <Printer className="w-3.5 h-3.5" /> Print
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadLoansHtml}
+                disabled={userLoans.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest bg-zera-yellow text-zera-emerald-dark hover:brightness-95 shadow-sm transition-all disabled:opacity-40"
+              >
+                <Download className="w-3.5 h-3.5" /> HTML
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {roleFilter === 'student' && <StudentSync />}
       {roleFilter === 'teacher' && <StaffSync />}
 
@@ -742,6 +852,14 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                     <div className="flex items-center gap-2 bg-zera-emerald/10 px-3 py-1 rounded-full text-[10px] font-black text-zera-emerald uppercase tracking-widest border border-zera-emerald/20">
                       <BookOpen className="w-3.5 h-3.5" /> {userLoans.filter(l => l.status === 'active').length} out · {userLoans.length} total
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowHistory(true)}
+                      title="Every book this member has borrowed, newest first"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest bg-natural-bg text-zera-emerald border border-zera-emerald/30 hover:bg-zera-emerald/10 shadow-sm transition-all"
+                    >
+                      <History className="w-3.5 h-3.5" /> History
+                    </button>
                     <button
                       type="button"
                       onClick={handlePrintLoans}
