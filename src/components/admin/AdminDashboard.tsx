@@ -13,6 +13,7 @@ import {
   TrendingUp,
   FileText,
   Trash2,
+  X,
   Loader2,
   RefreshCcw,
   Eraser,
@@ -39,6 +40,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
   const [loading, setLoading] = useState(true);
   const [isPurging, setIsPurging] = useState<string | null>(null);
   const [confirmDeleteActivityId, setConfirmDeleteActivityId] = useState<string | null>(null);
+  // Rows the librarian has tidied out of the Recent Activity feed. This is a
+  // view filter only — see handleClearLog for why these no longer delete.
+  const [dismissedActivityIds, setDismissedActivityIds] = useState<Set<string>>(new Set());
   const [recentLoans, setRecentLoans] = useState<Loan[]>([]);
   const [refreshingLog, setRefreshingLog] = useState(false);
   const [refreshingCats, setRefreshingCats] = useState(false);
@@ -127,37 +131,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
     };
   }, []);
 
-  const handleClearLog = async () => {
-    if (!confirm("Are you sure you want to clear the circulation log? This will reset all transaction history. This cannot be undone.")) return;
-    try {
-      const snap = await getDocs(collection(db, 'loans'));
-      const batch = writeBatch(db);
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      alert("Log cleared successfully.");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to clear log.");
-    }
+  /**
+   * Clear the Recent Activity feed — the panel only, not the data.
+   *
+   * This used to delete every document in the `loans` collection in one batch.
+   * That is not "clearing a log": loans ARE the borrowing history, so tidying
+   * this feed silently erased every member's record of what they had ever
+   * borrowed and returned, for the whole school, behind an unlabelled eraser
+   * icon. Returned loans are the only trace a returned book leaves, so they
+   * cannot be recovered afterwards.
+   *
+   * The feed is a live view of recent loans, so hiding rows is all "clear"
+   * should ever have meant. They come back on reload, which is correct — the
+   * underlying transactions still happened.
+   */
+  const visibleLoans = recentLoans.filter(l => !dismissedActivityIds.has(l.id));
+
+  const handleClearLog = () => {
+    if (recentLoans.length === 0) return;
+    setDismissedActivityIds(prev => {
+      const next = new Set(prev);
+      recentLoans.forEach(l => next.add(l.id));
+      return next;
+    });
   };
 
-  const handleDeleteActivity = async (id: string) => {
-    if (confirmDeleteActivityId !== id) {
-      setConfirmDeleteActivityId(id);
-      setTimeout(() => setConfirmDeleteActivityId(null), 5000); // 5 seconds
-      return;
-    }
-
-    try {
-      console.log("Attempting to delete activity:", id);
-      await deleteDoc(doc(db, 'loans', id));
-      setConfirmDeleteActivityId(null);
-    } catch (err) {
-      console.error("Dashboard delete error:", err);
-      // We don't use alert/confirm here as requested by environment constraints
-      // But we will console.log so the dev can see it
-      handleFirestoreError(err, OperationType.DELETE, `loans/${id}`);
-    }
+  /**
+   * Hide one row from the feed. Formerly deleted the loan document outright,
+   * which destroyed that member's record of the borrow and return.
+   */
+  const handleDeleteActivity = (id: string) => {
+    setConfirmDeleteActivityId(null);
+    setDismissedActivityIds(prev => new Set(prev).add(id));
   };
 
   const handleArchiveData = async (label: string) => {
@@ -333,7 +338,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                </button>
                <button 
                 onClick={handleClearLog}
-                className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg transition-colors border border-red-100"
+                title="Hide all rows from this feed (borrowing records are kept)"
+                className="p-1.5 bg-natural-bg hover:bg-natural-border/40 text-natural-muted rounded-lg transition-colors border border-natural-border"
                >
                  <Eraser className="w-3.5 h-3.5" />
                </button>
@@ -344,7 +350,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
           </div>
           <div className="bg-white border border-natural-border rounded-3xl overflow-hidden shadow-sm">
             <div className="divide-y divide-natural-border">
-              {recentLoans.length > 0 ? recentLoans.map((loan) => (
+              {visibleLoans.length > 0 ? visibleLoans.map((loan) => (
                 <div key={loan.id} className="p-4 flex items-center justify-between hover:bg-natural-bg/50 transition-colors group">
                   <div className="flex items-center gap-4">
                     <div className={cn("w-10 h-10 rounded-full flex items-center justify-center", 
@@ -364,21 +370,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
                   <div className="flex items-center gap-1 opacity-100 transition-opacity">
                     <button 
                       onClick={() => handleDeleteActivity(loan.id)}
-                      className={cn(
-                        "p-2 rounded-full transition-all flex items-center gap-1",
-                        confirmDeleteActivityId === loan.id 
-                          ? "bg-red-500 text-white animate-pulse px-3" 
-                          : "hover:bg-red-50 text-red-500"
-                      )}
-                      title={confirmDeleteActivityId === loan.id ? "Click again to confirm" : "Delete Activity"}
+                      className="p-2 rounded-full transition-all flex items-center gap-1 hover:bg-natural-bg text-natural-muted" 
+                      title="Hide this row from the feed (the borrowing record is kept)"
                     >
-                      <Trash2 className="w-4 h-4" />
-                      {confirmDeleteActivityId === loan.id && <span className="text-[10px] font-black uppercase tracking-tighter">Confirm?</span>}
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
               )) : (
-                <div className="p-12 text-center text-natural-muted italic font-serif">No library transactions recorded.</div>
+                <div className="p-12 text-center text-natural-muted italic font-serif">
+                  {recentLoans.length > 0 ? 'Feed hidden — reload to show it again.' : 'No library transactions recorded.'}
+                </div>
               )}
             </div>
           </div>

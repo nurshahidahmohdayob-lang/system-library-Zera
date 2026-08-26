@@ -747,7 +747,7 @@ export const CatalogManager = () => {
 
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Permanently delete ${selectedIds.size} selected book${selectedIds.size !== 1 ? 's' : ''}? Their copies and loan records will also be removed. This action cannot be undone.`)) {
+    if (!window.confirm(`Permanently delete ${selectedIds.size} selected book${selectedIds.size !== 1 ? 's' : ''}? Their copies and any current loans will also be removed; past borrowing history is kept. This action cannot be undone.`)) {
       return;
     }
 
@@ -759,8 +759,14 @@ export const CatalogManager = () => {
         for (const copyDoc of copiesSnap.docs) {
           await deleteDoc(doc(db, 'copies', copyDoc.id));
         }
+        // Only the ACTIVE loans go: those hold a copy against a member who no
+        // longer has anything to return. Returned loans are kept — they are that
+        // member's borrowing history, and the record carries its own bookTitle,
+        // so it still reads correctly once the book record is gone. Deleting
+        // them used to wipe a teacher's history the moment a title was weeded.
         const loansSnap = await getDocs(query(collection(db, 'loans'), where('bookId', '==', id)));
         for (const loanDoc of loansSnap.docs) {
+          if ((loanDoc.data() as { status?: string }).status === 'returned') continue;
           await deleteDoc(doc(db, 'loans', loanDoc.id));
         }
         await deleteDoc(doc(db, 'books', id));
