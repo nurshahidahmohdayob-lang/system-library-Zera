@@ -4,6 +4,7 @@ import { db } from '@/src/lib/firebase';
 import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { UserProfile, Loan } from '@/src/types';
 import { cn } from '@/src/lib/utils';
+import { useAuth } from '@/src/hooks/useAuth';
 
 /**
  * Finds members that exist more than once and lets an admin remove the spare.
@@ -46,6 +47,12 @@ const rankKeeper = (a: Dupe, b: Dupe): number =>
   String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
 
 export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+  // The record the current session is signed in as. Where one person has several
+  // login records there is no way to tell them apart by name — and deleting the
+  // one you are actually using just recreates it on your next sign-in, since a
+  // missing profile is provisioned from scratch at login.
+  const { user } = useAuth();
+  const myUid = user?.uid || '';
   const [groups, setGroups] = useState<{ key: string; label: string; records: Dupe[] }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -193,6 +200,11 @@ export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose })
                               <CheckCircle2 className="w-3 h-3" /> Suggested keep
                             </span>
                           )}
+                          {rec.uid === myUid && (
+                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-zera-yellow text-zera-emerald-dark flex items-center gap-1">
+                              You are signed in as this
+                            </span>
+                          )}
                         </div>
                         <p className="text-[10px] font-bold text-natural-muted tracking-wide truncate">
                           id {rec.uid.slice(0, 10)}
@@ -213,6 +225,11 @@ export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose })
                         {/* Returned loans do not block the delete — sometimes the
                             record genuinely has to go — but they are the only
                             trace a returned book leaves, so say what is lost. */}
+                        {rec.uid === myUid && (
+                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-1">
+                            <ShieldAlert className="w-3 h-3" /> Your current login — deleting it recreates it next sign-in
+                          </p>
+                        )}
                         {!blocked && rec.loansTotal > 0 && (
                           <p className="text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-1">
                             <ShieldAlert className="w-3 h-3" />
