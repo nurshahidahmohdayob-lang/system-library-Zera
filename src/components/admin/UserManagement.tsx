@@ -43,6 +43,7 @@ import {
 import { cn, clean } from '@/src/lib/utils';
 import { format } from 'date-fns';
 import { MemberDuplicates } from './MemberDuplicates';
+import { collapsibleDuplicateIds } from '@/src/lib/memberVisibility';
 import { BarcodeService, BarcodeType } from '@/src/services/BarcodeService';
 import { StudentSync } from '@/src/components/admin/StudentSync';
 import { StaffSync } from '@/src/components/admin/StaffSync';
@@ -190,34 +191,15 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const allMembers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile));
 
-      // Collapse redundant login stubs.
-      //
-      // Signing in creates a profile keyed by auth uid and named from the email
-      // ("wafi.a"), while the staff sync holds the real record ("Wafi",
-      // Zerastaff38). Both are the same person, so every teacher who logs in
-      // adds a second, worse-named row to this list — 15 staff emails are
-      // doubled up this way, and the count grows with each new sign-in.
-      //
-      // The stub is hidden, never deleted: it is the record their login is
-      // attached to. A stub holding any loan stays visible, because that is
-      // where their borrowing history lives. Admin → Duplicates still lists
-      // everything, and "show all" below restores them here.
-      const registryEmails = new Set(
-        allMembers
-          .filter(u => u.syncSource || u.barcode || u.studentId)
-          .map(u => String(u.email || '').toLowerCase().trim())
-          .filter(Boolean)
-      );
-      const isCollapsibleStub = (u: UserProfile) => {
-        const email = String(u.email || '').toLowerCase().trim();
-        const isStub = !u.syncSource && !u.barcode && !u.studentId;
-        return isStub && !!email && registryEmails.has(email) && !idsWithLoans.has(u.uid);
-      };
-      const collapsed = allMembers.filter(isCollapsibleStub);
-      setHiddenDupeCount(collapsed.length);
+      // Collapse redundant login stubs. The rule lives in memberVisibility so
+      // this list and the lending terminal always agree on who exists; see there
+      // for why the stub is hidden rather than deleted. "Show all" restores them
+      // here, and Admin → Duplicates always lists every record.
+      const hidden = collapsibleDuplicateIds(allMembers, idsWithLoans);
+      setHiddenDupeCount(hidden.size);
       const visibleMembers = showAllRecords
         ? allMembers
-        : allMembers.filter(u => !isCollapsibleStub(u));
+        : allMembers.filter(u => !hidden.has(u.uid));
 
       // filter in-memory
       const filtered = visibleMembers.filter(u => {

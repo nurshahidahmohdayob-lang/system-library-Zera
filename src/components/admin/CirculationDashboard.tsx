@@ -22,6 +22,9 @@ import { BatchCirculationImporter } from './BatchCirculationImporter';
 // Loan limits/durations are shared with the Member Portal's policy section so the
 // rule the desk enforces and the rule members are shown can never drift apart.
 import { STUDENT_LOAN_LIMIT, STUDENT_LOAN_DAYS, STAFF_LOAN_MONTHS } from '@/src/lib/borrowingPolicy';
+// Same duplicate-collapsing rule the Members list uses, so a member visible
+// there is never missing from the lending terminal (or the reverse).
+import { collapsibleDuplicateIds } from '@/src/lib/memberVisibility';
 
 // Loan dates may be ISO strings (new records), Firestore Timestamps, or {seconds}
 // shapes (older/imported records). Parse defensively so a stray value can't crash
@@ -76,8 +79,16 @@ export const CirculationDashboard = () => {
     // meant members beyond the first 100 (e.g. teachers loaded later) never
     // appeared in the lending terminal even though they exist.
     const fetchUsers = async () => {
-      const snapshot = await getDocs(collection(db, 'users'));
-      setUsers(snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile)));
+      const [userSnap, loanSnap] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'loans')),
+      ]);
+      const all = userSnap.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile));
+      // A stub holding loans stays: the loans point at it, so hiding it would
+      // put that member's books out of reach at the desk.
+      const withLoans = new Set(loanSnap.docs.map(d => (d.data() as { userId?: string }).userId || ''));
+      const hidden = collapsibleDuplicateIds(all, withLoans);
+      setUsers(all.filter(u => !hidden.has(u.uid)));
     };
     fetchUsers();
   }, []);
