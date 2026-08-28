@@ -105,6 +105,10 @@ export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose })
 
   const remove = async (rec: Dupe) => {
     if (confirmId !== rec.uid) {
+      if (rec.loansTotal > 0 && !window.confirm(
+        `${rec.name} has ${rec.loansTotal} past loan${rec.loansTotal !== 1 ? 's' : ''} recorded against this record.\n\n` +
+        `Deleting it removes that borrowing history permanently — it cannot be recovered. Continue?`
+      )) return;
       setConfirmId(rec.uid);
       setTimeout(() => setConfirmId(c => (c === rec.uid ? null : c)), 4000);
       return;
@@ -204,6 +208,15 @@ export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose })
                         {blocked && (
                           <p className="text-[10px] font-black uppercase tracking-widest text-rose-600 flex items-center gap-1">
                             <ShieldAlert className="w-3 h-3" /> Has books out — return them before deleting
+                          </p>
+                        )}
+                        {/* Returned loans do not block the delete — sometimes the
+                            record genuinely has to go — but they are the only
+                            trace a returned book leaves, so say what is lost. */}
+                        {!blocked && rec.loansTotal > 0 && (
+                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-1">
+                            <ShieldAlert className="w-3 h-3" />
+                            Deleting loses {rec.loansTotal} past loan{rec.loansTotal !== 1 ? 's' : ''} of history
                           </p>
                         )}
                       </div>
