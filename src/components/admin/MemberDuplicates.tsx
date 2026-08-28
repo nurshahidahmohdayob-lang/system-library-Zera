@@ -29,14 +29,20 @@ type Dupe = UserProfile & {
 const norm = (s?: string | null) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
- * Which record should survive. A registry record wins outright: it carries the
- * proper name and accession barcode, and the sync would recreate it anyway.
- * Failing that, the record holding the borrowing history wins, because deleting
- * it would orphan those loans.
+ * Which record should survive.
+ *
+ * Borrowing activity outranks everything: deleting the record that holds the
+ * loans orphans them, and a returned loan is the only trace a returned book
+ * leaves. Ranking the registry record first (as this did originally) suggested
+ * keeping a pristine synced record over a login stub carrying six active loans
+ * — which would have been the wrong call every time it mattered.
+ *
+ * Among records with equal activity the registry one wins: it has the proper
+ * name and accession barcode, and the sync would recreate it anyway.
  */
 const rankKeeper = (a: Dupe, b: Dupe): number =>
-  Number(b.fromRegistry) - Number(a.fromRegistry) ||
   b.loansTotal - a.loansTotal ||
+  Number(b.fromRegistry) - Number(a.fromRegistry) ||
   String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
 
 export const MemberDuplicates: React.FC<{ onClose: () => void }> = ({ onClose }) => {

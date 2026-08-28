@@ -120,10 +120,23 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
   const [showDuplicates, setShowDuplicates] = useState(false);
   // Full borrowing log for the open member, shown on demand.
   const [showHistory, setShowHistory] = useState(false);
+  // Login stubs collapsed out of the list (see the snapshot effect), and the
+  // escape hatch that shows them again.
+  const [hiddenDupeCount, setHiddenDupeCount] = useState(0);
+  const [showAllRecords, setShowAllRecords] = useState(false);
+  // Ids of members who have at least one loan, so a record holding borrowing
+  // history is never collapsed out of sight.
+  const [idsWithLoans, setIdsWithLoans] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    getDocs(collection(db, 'loans'))
+      .then(snap => setIdsWithLoans(new Set(snap.docs.map(d => (d.data() as { userId?: string }).userId || ''))))
+      .catch(err => console.error('Loan-owner lookup failed:', err));
+  }, []);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [roleFilter, searchTerm]);
+  }, [roleFilter, searchTerm, idsWithLoans, showAllRecords]);
   
   const [newUser, setNewUser] = useState<Partial<UserProfile>>({
     name: '',
@@ -176,8 +189,38 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const allMembers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile));
+
+      // Collapse redundant login stubs.
+      //
+      // Signing in creates a profile keyed by auth uid and named from the email
+      // ("wafi.a"), while the staff sync holds the real record ("Wafi",
+      // Zerastaff38). Both are the same person, so every teacher who logs in
+      // adds a second, worse-named row to this list — 15 staff emails are
+      // doubled up this way, and the count grows with each new sign-in.
+      //
+      // The stub is hidden, never deleted: it is the record their login is
+      // attached to. A stub holding any loan stays visible, because that is
+      // where their borrowing history lives. Admin → Duplicates still lists
+      // everything, and "show all" below restores them here.
+      const registryEmails = new Set(
+        allMembers
+          .filter(u => u.syncSource || u.barcode || u.studentId)
+          .map(u => String(u.email || '').toLowerCase().trim())
+          .filter(Boolean)
+      );
+      const isCollapsibleStub = (u: UserProfile) => {
+        const email = String(u.email || '').toLowerCase().trim();
+        const isStub = !u.syncSource && !u.barcode && !u.studentId;
+        return isStub && !!email && registryEmails.has(email) && !idsWithLoans.has(u.uid);
+      };
+      const collapsed = allMembers.filter(isCollapsibleStub);
+      setHiddenDupeCount(collapsed.length);
+      const visibleMembers = showAllRecords
+        ? allMembers
+        : allMembers.filter(u => !isCollapsibleStub(u));
+
       // filter in-memory
-      const filtered = allMembers.filter(u => {
+      const filtered = visibleMembers.filter(u => {
         const matchesRole = roleFilter ? u.role === roleFilter : true;
         const isNotArchived = u.status !== 'archived';
         const matchesSearch = searchTerm ? (
@@ -518,6 +561,18 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
             )}
           </div>
         </div>
+        {hiddenDupeCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAllRecords(v => !v)}
+            title="Login records that duplicate a synced staff record are collapsed out of this list"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-full text-[11px] font-black uppercase tracking-widest bg-natural-bg text-natural-muted border border-natural-border hover:text-zera-emerald transition-all"
+          >
+            {showAllRecords
+              ? `Hide ${hiddenDupeCount} duplicate${hiddenDupeCount !== 1 ? 's' : ''}`
+              : `${hiddenDupeCount} duplicate${hiddenDupeCount !== 1 ? 's' : ''} hidden — show`}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowDuplicates(true)}
