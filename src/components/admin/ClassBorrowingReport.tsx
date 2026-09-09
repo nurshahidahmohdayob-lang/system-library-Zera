@@ -24,7 +24,26 @@ interface Row {
   loans: Loan[];
 }
 
-const val = (u: UserProfile, f: GroupField) => String((u as unknown as Record<string, unknown>)[f] ?? '').trim();
+/**
+ * Fold the academic-year suffix out of a group name.
+ *
+ * The same year group is recorded two ways — "Year 1" on some records and
+ * "Year 1 2026" on others — which split every year into two half-sized entries
+ * in the picker, so a "Year 1" report silently omitted the 18 students filed
+ * under "Year 1 2026". Both collapse to "Year 1" here.
+ *
+ * Anything that is not a "Year N" is left exactly as stored: class names like
+ * "Shaddai" carry no year, and "2025/2026" is an academic year rather than a
+ * year group, so inventing a number for them would merge unrelated students.
+ */
+const normaliseGroup = (raw: string): string => {
+  const v = raw.trim();
+  const m = v.match(/^year\s*(\d+)\b/i);
+  return m ? `Year ${parseInt(m[1], 10)}` : v;
+};
+
+const val = (u: UserProfile, f: GroupField) =>
+  normaliseGroup(String((u as unknown as Record<string, unknown>)[f] ?? '').trim());
 
 const fmt = (v: unknown): string => {
   if (!v) return '';
@@ -67,7 +86,14 @@ export const ClassBorrowingReport: React.FC<{ onClose: () => void }> = ({ onClos
       const v = val(m, groupBy);
       if (v) counts.set(v, (counts.get(v) || 0) + 1);
     });
-    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+    // "Year 2" must sort before "Year 10", and named classes after the years.
+    const yearNum = (g: string) => {
+      const m = g.match(/^Year (\d+)$/);
+      return m ? parseInt(m[1], 10) : Number.POSITIVE_INFINITY;
+    };
+    return [...counts.entries()].sort((a, b) =>
+      yearNum(a[0]) - yearNum(b[0]) || a[0].localeCompare(b[0], undefined, { numeric: true })
+    );
   }, [members, groupBy]);
 
   // Reset the selection when the grouping changes — a class name is not a valid
