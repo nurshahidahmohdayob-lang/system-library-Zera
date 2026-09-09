@@ -36,6 +36,7 @@ import {
 } from 'firebase/firestore';
 import { Book, UserProfile, Loan } from '@/src/types';
 import { handleFirestoreError, OperationType } from '@/src/hooks/useAuth';
+import { ClassBorrowingReport } from './ClassBorrowingReport';
 
 // Returns a book's Lexile: the measured value if present, otherwise an ESTIMATED
 // range inferred from grade-band signals in the title/category/series, so no book
@@ -327,6 +328,7 @@ export const Reports: React.FC = () => {
   const [isClearing, setIsClearing] = useState(false);
 
   const [confirmDeleteStats, setConfirmDeleteStats] = useState(false);
+  const [showClassReport, setShowClassReport] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -384,10 +386,33 @@ export const Reports: React.FC = () => {
     fetchData();
   }, []);
 
+  /**
+   * Deletes every borrowing record in the library.
+   *
+   * Presented as "Clear Statistics", but the statistics are derived from the
+   * loans collection — so clearing them means deleting every record of every
+   * book any member has ever borrowed or returned, for the whole school. A
+   * returned loan is the only trace a returned book leaves; once gone, a
+   * member's history cannot be reconstructed. Two clicks used to be enough.
+   *
+   * The capability is kept for a genuine end-of-year reset, but now requires
+   * the phrase to be typed, so it cannot be reached by mis-clicking.
+   */
   const handleClearLoans = async () => {
     if (!confirmDeleteStats) {
       setConfirmDeleteStats(true);
       setTimeout(() => setConfirmDeleteStats(false), 3000);
+      return;
+    }
+
+    const loanCount = (await getDocs(collection(db, 'loans'))).size;
+    const typed = window.prompt(
+      `This deletes ALL ${loanCount} borrowing records for the whole school — every book anyone has ever borrowed or returned. ` +
+      `Member borrowing histories will be empty afterwards and cannot be recovered.\n\n` +
+      `Type DELETE ALL to confirm.`
+    );
+    if (typed !== 'DELETE ALL') {
+      setConfirmDeleteStats(false);
       return;
     }
     
@@ -535,6 +560,14 @@ export const Reports: React.FC = () => {
           <p className="text-natural-muted font-medium">Generate, export and customize library performance analytics.</p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowClassReport(true)}
+            title="List every student in a year group or class with the books they borrowed"
+            className="flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest bg-zera-emerald text-white hover:bg-zera-emerald-dark shadow-md transition-all"
+          >
+            <Users className="w-4 h-4" /> Borrowing by Class
+          </button>
           <button 
             onClick={fetchData}
             className="p-2.5 bg-white border border-natural-border rounded-xl hover:bg-natural-bg transition-colors shadow-sm"
@@ -552,7 +585,7 @@ export const Reports: React.FC = () => {
             )}
           >
             <Trash2 className="w-4 h-4" /> 
-            {isClearing ? 'Clearing...' : confirmDeleteStats ? 'Confirm Clear All?' : 'Clear Statistics'}
+            {isClearing ? 'Deleting...' : confirmDeleteStats ? 'Delete every borrowing record?' : 'Delete All History'}
           </button>
         </div>
       </div>
@@ -611,11 +644,18 @@ export const Reports: React.FC = () => {
         <div className="bg-white border border-natural-border rounded-3xl p-8 shadow-sm">
            <div className="flex justify-between items-center mb-6">
              <h4 className="font-bold text-natural-text">Top Borrower (All-Time)</h4>
-             <button 
-                onClick={handleClearLoans}
-                className="text-[9px] font-black text-red-500 uppercase tracking-widest hover:underline"
+             {/* Recomputes the leaderboard. This used to call handleClearLoans,
+                 which deleted every document in the loans collection — a
+                 school-wide wipe of all borrowing history, behind a link that
+                 read "Reset Rankings". The rankings are derived from loans, so
+                 there is nothing to reset but the view. */}
+             <button
+                onClick={fetchData}
+                disabled={loading}
+                title="Recalculate the rankings from current borrowing records"
+                className="text-[9px] font-black text-zera-emerald uppercase tracking-widest hover:underline disabled:opacity-50"
               >
-                Reset Rankings
+                {loading ? 'Refreshing…' : 'Refresh Rankings'}
              </button>
            </div>
            
@@ -649,6 +689,8 @@ export const Reports: React.FC = () => {
            </div>
         </div>
       </div>
+
+      {showClassReport && <ClassBorrowingReport onClose={() => setShowClassReport(false)} />}
 
       {preview && (
         <PreviewModal 
