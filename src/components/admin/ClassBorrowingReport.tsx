@@ -25,25 +25,20 @@ interface Row {
 }
 
 /**
- * Fold the academic-year suffix out of a group name.
+ * Group names are used exactly as recorded.
  *
- * The same year group is recorded two ways — "Year 1" on some records and
- * "Year 1 2026" on others — which split every year into two half-sized entries
- * in the picker, so a "Year 1" report silently omitted the 18 students filed
- * under "Year 1 2026". Both collapse to "Year 1" here.
+ * "Year 1" and "Year 1 2026" look like one group spelled two ways, and folding
+ * them together seemed obviously right — but they are different children. The
+ * two sets share no name and no student id, and their id ranges barely overlap
+ * (3719-6120 against 6095-6488): the bare form is an earlier intake, the
+ * suffixed one is the current year. Merging them put 33 students in a Year 1
+ * report that has 13, silently mixing a cohort that has since moved up.
  *
- * Anything that is not a "Year N" is left exactly as stored: class names like
- * "Shaddai" carry no year, and "2025/2026" is an academic year rather than a
- * year group, so inventing a number for them would merge unrelated students.
+ * So the suffix is meaningful and stays. Only the sort is adjusted, to keep
+ * the two forms of a year adjacent and put Year 2 before Year 10.
  */
-const normaliseGroup = (raw: string): string => {
-  const v = raw.trim();
-  const m = v.match(/^year\s*(\d+)\b/i);
-  return m ? `Year ${parseInt(m[1], 10)}` : v;
-};
-
 const val = (u: UserProfile, f: GroupField) =>
-  normaliseGroup(String((u as unknown as Record<string, unknown>)[f] ?? '').trim());
+  String((u as unknown as Record<string, unknown>)[f] ?? '').trim();
 
 const fmt = (v: unknown): string => {
   if (!v) return '';
@@ -86,9 +81,10 @@ export const ClassBorrowingReport: React.FC<{ onClose: () => void }> = ({ onClos
       const v = val(m, groupBy);
       if (v) counts.set(v, (counts.get(v) || 0) + 1);
     });
-    // "Year 2" must sort before "Year 10", and named classes after the years.
+    // Year 2 before Year 10, and the two spellings of a year side by side;
+    // anything without a year number sorts after them.
     const yearNum = (g: string) => {
-      const m = g.match(/^Year (\d+)$/);
+      const m = g.match(/^year\s*(\d+)\b/i);
       return m ? parseInt(m[1], 10) : Number.POSITIVE_INFINITY;
     };
     return [...counts.entries()].sort((a, b) =>
