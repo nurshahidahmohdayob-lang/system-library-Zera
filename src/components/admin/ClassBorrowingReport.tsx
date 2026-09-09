@@ -37,8 +37,22 @@ interface Row {
  * So the suffix is meaningful and stays. Only the sort is adjusted, to keep
  * the two forms of a year adjacent and put Year 2 before Year 10.
  */
+/** Shown for students whose grouping field is empty, so they stay reachable. */
+const UNSET = '(No class recorded)';
+
 const val = (u: UserProfile, f: GroupField) =>
   String((u as unknown as Record<string, unknown>)[f] ?? '').trim();
+
+/**
+ * Grouping key, with blanks folded into one visible bucket.
+ *
+ * 136 of 276 students have no class recorded — every student in Years 8, 9, 10
+ * and 11, and all but three of Year 7. Dropping blanks would make those
+ * children unreachable from this report entirely, and silently: the year simply
+ * would not appear in the list, which reads as "no such class" rather than "no
+ * class recorded".
+ */
+const groupKey = (u: UserProfile, f: GroupField) => val(u, f) || UNSET;
 
 const fmt = (v: unknown): string => {
   if (!v) return '';
@@ -78,8 +92,8 @@ export const ClassBorrowingReport: React.FC<{ onClose: () => void }> = ({ onClos
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     members.forEach(m => {
-      const v = val(m, groupBy);
-      if (v) counts.set(v, (counts.get(v) || 0) + 1);
+      const v = groupKey(m, groupBy);
+      counts.set(v, (counts.get(v) || 0) + 1);
     });
     // Year 2 before Year 10, and the two spellings of a year side by side;
     // anything without a year number sorts after them.
@@ -88,7 +102,10 @@ export const ClassBorrowingReport: React.FC<{ onClose: () => void }> = ({ onClos
       return m ? parseInt(m[1], 10) : Number.POSITIVE_INFINITY;
     };
     return [...counts.entries()].sort((a, b) =>
-      yearNum(a[0]) - yearNum(b[0]) || a[0].localeCompare(b[0], undefined, { numeric: true })
+      // The unset bucket sits last — it is a gap to fix, not a class.
+      Number(a[0] === UNSET) - Number(b[0] === UNSET) ||
+      yearNum(a[0]) - yearNum(b[0]) ||
+      a[0].localeCompare(b[0], undefined, { numeric: true })
     );
   }, [members, groupBy]);
 
@@ -99,7 +116,7 @@ export const ClassBorrowingReport: React.FC<{ onClose: () => void }> = ({ onClos
   const rows: Row[] = useMemo(() => {
     if (!selected) return [];
     return members
-      .filter(m => val(m, groupBy) === selected)
+      .filter(m => groupKey(m, groupBy) === selected)
       .map(student => ({
         student,
         loans: loans
