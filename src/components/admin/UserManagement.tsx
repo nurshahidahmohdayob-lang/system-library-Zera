@@ -429,7 +429,16 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
 
       if (editingUser) {
         console.log("Updating:", editingUser.uid);
-        await updateDoc(doc(db, 'users', editingUser.uid), dataToSave);
+        // Changing the class by hand pins it: the student sync sends a
+        // teacher's name in that field for some pupils, and would otherwise
+        // undo this correction on its next run. Only set on an actual change,
+        // so re-saving an unrelated field does not silently detach a student
+        // from the registry.
+        const classChanged = (editingUser.grade || '').trim() !== dataToSave.grade;
+        await updateDoc(doc(db, 'users', editingUser.uid), {
+          ...dataToSave,
+          ...(classChanged ? { classOverride: true } : {}),
+        });
         alert(`Successfully updated "${dataToSave.name}"`);
       } else {
         console.log("Creating new user...");

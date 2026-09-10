@@ -527,6 +527,23 @@ export const StudentSync: React.FC = () => {
         // Map fields based on the API payload specifications
         const mappedName = personName;
         const mappedGrade = detailedStudent.class || detailedStudent.grade || '';
+
+        /**
+         * Which class value survives this sync.
+         *
+         * Two ways the registry used to destroy a correct value. It sends a
+         * teacher's name in the class field for some pupils ("Coach Xiaobai"),
+         * so a librarian's correction was undone on the next run; and when it
+         * sends nothing at all, writing that through blanked a class the school
+         * had already recorded.
+         *
+         * So a class corrected in the app is kept (classOverride, set by the
+         * member form), and an empty value from the registry never overwrites
+         * one already stored. Everyone else still tracks Commun as before.
+         */
+        const resolvedGrade = existingData?.classOverride
+          ? (existingData.grade ?? '')
+          : (mappedGrade || existingData?.grade || '');
         
         // Prepare doc payload
         const updatedProfilePayload: any = {
@@ -534,7 +551,7 @@ export const StudentSync: React.FC = () => {
           email: detailedStudent.email || '',
           role: 'student',
           studentId: studentIdStr,
-          grade: mappedGrade,
+          grade: resolvedGrade,
           phoneNumber: detailedStudent.phone || '',
           status: detailedStudent.status || 'active',
           gender: detailedStudent.gender || 'unspecified',
