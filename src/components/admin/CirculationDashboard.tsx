@@ -11,7 +11,8 @@ import {
   CheckCircle2,
   Loader2,
   Eraser,
-  Upload
+  Upload,
+  Users
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { collection, query, limit, addDoc, doc, updateDoc, where, getDocs, getDoc, orderBy, DocumentSnapshot } from 'firebase/firestore';
@@ -19,6 +20,7 @@ import { Book as BookType, UserProfile, Loan } from '@/src/types';
 import { format, addDays, addMonths } from 'date-fns';
 import { cn } from '@/src/lib/utils';
 import { BatchCirculationImporter } from './BatchCirculationImporter';
+import { ClassLending } from './ClassLending';
 // Loan limits/durations are shared with the Member Portal's policy section so the
 // rule the desk enforces and the rule members are shown can never drift apart.
 import { STUDENT_LOAN_LIMIT, STUDENT_LOAN_DAYS, STAFF_LOAN_MONTHS } from '@/src/lib/borrowingPolicy';
@@ -54,6 +56,7 @@ export const CirculationDashboard = () => {
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
+  const [isClassLending, setIsClassLending] = useState(false);
   // The books currently on loan to the selected member, read LIVE from
   // Firestore. Unlike an in-memory session list, this is never lost on reload
   // or when switching members — it always reflects the real borrowing records
@@ -576,6 +579,16 @@ export const CirculationDashboard = () => {
           <h2 className="font-serif text-3xl font-bold text-natural-text">Circulation Desk</h2>
           <p className="text-sm text-natural-muted font-medium italic">Zera Education Institutional Lending Management</p>
         </div>
+        <div className="flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={() => setIsClassLending(true)}
+          className="flex items-center gap-2 px-5 py-2.5 bg-zera-emerald text-white hover:bg-zera-emerald-dark rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
+          title="Bring up a class register and issue a book beside each name"
+        >
+          <Users className="w-4 h-4" />
+          Class Lending
+        </button>
         <button
           type="button"
           onClick={() => setIsBatchImporting(true)}
@@ -585,9 +598,12 @@ export const CirculationDashboard = () => {
           <Upload className="w-4 h-4" />
           Batch Import Loans
         </button>
+        </div>
       </div>
 
       {isBatchImporting && <BatchCirculationImporter onClose={() => setIsBatchImporting(false)} />}
+
+      {isClassLending && <ClassLending onClose={() => setIsClassLending(false)} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white border border-natural-border rounded-[40px] p-8 shadow-sm flex flex-col gap-8 h-fit">
