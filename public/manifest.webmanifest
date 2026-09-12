@@ -1,0 +1,20 @@
+{
+  "name": "Zera Education — Library System",
+  "short_name": "Zera Library",
+  "description": "Catalogue, circulation and member portal for the Zera International Library.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FCFAF7",
+  "theme_color": "#0A4F29",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Circulation", "url": "/?view=circulation" },
+    { "name": "Catalogue", "url": "/?view=catalog" }
+  ]
+}
