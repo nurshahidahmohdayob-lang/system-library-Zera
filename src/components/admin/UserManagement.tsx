@@ -619,7 +619,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto overflow-x-auto">
               {userLoans.length === 0 ? (
                 <div className="py-20 text-center space-y-2">
                   <History className="w-10 h-10 mx-auto text-natural-muted opacity-25" />
@@ -1109,7 +1109,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ roleFilter }) =>
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                 <div className="bg-natural-bg rounded-2xl p-4 border border-natural-border">
                   <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted/70 mb-1">ISBN</p>
                   <p className="font-mono text-sm font-bold text-zera-emerald break-all">{clean(viewBook.isbn) || '—'}</p>

@@ -305,7 +305,7 @@ export const InventoryAudit = () => {
                     <p className="text-xs font-black uppercase tracking-tight">Audit Session Finalized</p>
                   </div>
                   {lastAuditSummary && (
-                    <div className="grid grid-cols-2 gap-2 mt-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                        <div className="bg-white p-2 rounded-xl border border-emerald-100">
                           <p className="text-[10px] text-natural-muted font-bold uppercase">Scanned</p>
                           <p className="text-lg font-black text-emerald-600">{lastAuditSummary.scanned}</p>

@@ -625,7 +625,7 @@ export const Reports: React.FC = () => {
              <TrendingUp className="w-5 h-5 text-zera-emerald" />
            </div>
            
-           <div className="grid grid-cols-2 gap-6">
+           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               {[
                 { label: 'Total Books', val: stats.books, icon: BookOpen, color: 'text-indigo-600' },
                 { label: 'Available', val: stats.availableBooks, icon: CheckCircle, color: 'text-emerald-600' },

@@ -10,6 +10,7 @@ import {
   BarChart, 
   Settings,
   LogOut,
+  Menu,
   ChevronRight,
   Plus,
   Users,
@@ -601,6 +602,10 @@ const AdminPanel = () => {
   const { profile, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'reconcile' | 'circulation' | 'holds' | 'inventory' | 'stocktake' | 'students' | 'teachers' | 'resources' | 'acquisition' | 'reports' | 'barcodes'>('dashboard');
   const pendingHolds = usePendingHoldsCount(true);
+  // On a phone the sidebar is a drawer: 256px of fixed navigation left roughly
+  // 119px of a 375px screen for the actual page, which made every admin screen
+  // unusable. From md up it stays permanently docked as before.
+  const [navOpen, setNavOpen] = useState(false);
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -618,10 +623,26 @@ const AdminPanel = () => {
     { id: 'reports', label: 'Reports', icon: FileText },
   ];
 
+  const activeLabel = menuItems.find(m => m.id === activeTab)?.label || 'Dashboard';
+
   return (
-    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
+    <div className="flex h-[calc(100vh-64px)] overflow-hidden relative">
+      {/* Phone: dim the page behind the open drawer, and close on tap. */}
+      {navOpen && (
+        <div
+          className="md:hidden fixed inset-0 top-16 z-30 bg-zera-emerald/30 backdrop-blur-sm"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-natural-nav border-r border-natural-border p-4 flex flex-col gap-4 overflow-y-auto">
+      <aside className={cn(
+        "bg-natural-nav border-r border-natural-border p-4 flex flex-col gap-4 overflow-y-auto",
+        "w-64 shrink-0",
+        // Off-canvas on phones, docked from md up.
+        "max-md:fixed max-md:inset-y-0 max-md:top-16 max-md:z-40 max-md:shadow-2xl max-md:transition-transform",
+        navOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
+      )}>
         <div className="mb-2 px-2">
           <p className="text-[10px] font-bold uppercase tracking-wider text-natural-muted italic">Library Management</p>
         </div>
@@ -631,7 +652,7 @@ const AdminPanel = () => {
             {menuItems.map((item) => (
               <button 
                 key={item.id}
-                onClick={() => setActiveTab(item.id as any)}
+                onClick={() => { setActiveTab(item.id as any); setNavOpen(false); }}
                 className={cn(
                   "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all group cursor-pointer",
                   activeTab === item.id 
@@ -684,7 +705,20 @@ const AdminPanel = () => {
       </aside>
 
       {/* Content */}
-      <main className="flex-1 overflow-y-auto p-8 bg-natural-bg/50">
+      <main className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-natural-bg/50">
+        {/* Phone-only bar: opens the drawer and says where you are, since the
+            docked sidebar is the only thing that shows that on desktop. */}
+        <div className="md:hidden flex items-center gap-3 mb-4 sticky top-0 z-20 -mx-4 px-4 py-2 bg-natural-bg/95 backdrop-blur border-b border-natural-border">
+          <button
+            type="button"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open menu"
+            className="p-2 rounded-xl bg-white border border-natural-border text-zera-emerald shadow-sm active:scale-95 transition-transform"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <p className="text-sm font-black text-natural-text uppercase tracking-tight truncate">{activeLabel}</p>
+        </div>
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}

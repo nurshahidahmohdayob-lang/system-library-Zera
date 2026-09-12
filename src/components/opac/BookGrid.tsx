@@ -454,7 +454,7 @@ export const BookGrid = () => {
                   <p className="text-lg font-bold text-natural-muted italic">By {selectedBook.author}</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 bg-natural-bg p-6 rounded-[24px] border border-natural-border shadow-inner">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-natural-bg p-4 sm:p-6 rounded-[24px] border border-natural-border shadow-inner">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald">
                       <Barcode className="w-5 h-5" />

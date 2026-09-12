@@ -293,7 +293,7 @@ export const Acquisition: React.FC = () => {
               </div>
 
               <form onSubmit={handleSave} className="p-8 space-y-6">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="col-span-2 space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-natural-muted block ml-1">Book Title</label>
                     <input 

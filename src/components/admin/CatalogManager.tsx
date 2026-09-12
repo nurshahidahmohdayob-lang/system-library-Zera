@@ -1094,7 +1094,7 @@ export const CatalogManager = () => {
           </div>
 
           <div className="md:col-span-2 space-y-6">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Book Title</label>
                 <div className="flex gap-2">
@@ -1126,7 +1126,7 @@ export const CatalogManager = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Sub-Series (Internal)</label>
                 <input
@@ -1149,7 +1149,7 @@ export const CatalogManager = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Subject Category</label>
                 <select 
@@ -1186,7 +1186,7 @@ export const CatalogManager = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-natural-muted">Language</label>
                 <input 
@@ -1647,7 +1647,7 @@ export const CatalogManager = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4 bg-natural-bg p-6 rounded-[24px] border border-natural-border shadow-inner">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-natural-bg p-6 rounded-[24px] border border-natural-border shadow-inner">
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-zera-emerald shrink-0">
                     <Barcode className="w-5 h-5" />

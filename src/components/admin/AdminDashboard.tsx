@@ -292,7 +292,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
         {/* Quick Actions */}
         <div className="lg:col-span-1 space-y-6">
           <h3 className="text-lg font-bold text-natural-text px-1">Quick Librarian Actions</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {quickActions.map((action, i) => (
               <button 
                 key={i}
@@ -385,7 +385,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="bg-white border border-natural-border rounded-3xl p-6 shadow-sm">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-sm font-bold flex items-center gap-2">
