@@ -57,6 +57,10 @@ export const CirculationDashboard = () => {
   const [loading, setLoading] = useState(false);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
   const [isClassLending, setIsClassLending] = useState(false);
+  // Book opened from the "books out" list. The loan stores only a title, so the
+  // catalogue record is fetched by its bookId on demand.
+  const [viewBook, setViewBook] = useState<BookType | null>(null);
+  const [viewBookLoading, setViewBookLoading] = useState<string | null>(null);
   // The books currently on loan to the selected member, read LIVE from
   // Firestore. Unlike an in-memory session list, this is never lost on reload
   // or when switching members — it always reflects the real borrowing records
@@ -259,6 +263,28 @@ export const CirculationDashboard = () => {
   const selectUser = (user: UserProfile) => {
     setSelectedUser(user);
     setSearchTerm(user.name);
+  };
+
+  /** Open the catalogue record behind a loan the librarian tapped. */
+  const openBookDetails = async (loan: Loan) => {
+    if (!loan.bookId) {
+      setViewBook({ title: loan.bookTitle, author: '' } as BookType);
+      return;
+    }
+    setViewBookLoading(loan.id);
+    try {
+      const snap = await getDoc(doc(db, 'books', loan.bookId));
+      setViewBook(snap.exists()
+        ? ({ id: snap.id, ...snap.data() } as BookType)
+        // The book record can be gone while the loan survives — deleting a title
+        // keeps its returned loans — so fall back to what the loan itself knows.
+        : ({ title: loan.bookTitle, author: '' } as BookType));
+    } catch (err) {
+      console.error('Book lookup failed:', err);
+      setViewBook({ title: loan.bookTitle, author: '' } as BookType);
+    } finally {
+      setViewBookLoading(null);
+    }
   };
 
   const selectBook = (book: BookType) => {
@@ -605,6 +631,89 @@ export const CirculationDashboard = () => {
 
       {isClassLending && <ClassLending onClose={() => setIsClassLending(false)} />}
 
+      {/* Book details, opened from a row in the member's books-out list. */}
+      {viewBook && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-8">
+          <div className="absolute inset-0 bg-zera-emerald/40 backdrop-blur-md" onClick={() => setViewBook(null)} />
+          <div className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl max-h-[88vh] overflow-y-auto animate-in zoom-in-95">
+            <button
+              type="button"
+              onClick={() => setViewBook(null)}
+              title="Close"
+              className="absolute top-4 right-4 z-10 p-2 bg-white/90 backdrop-blur rounded-full border border-natural-border text-natural-muted hover:text-rose-500 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="p-6 sm:p-8 flex flex-col sm:flex-row gap-6">
+              <div className="w-32 shrink-0 mx-auto sm:mx-0 aspect-[3/4] rounded-2xl overflow-hidden border border-natural-border bg-natural-bg flex items-center justify-center">
+                {viewBook.coverUrl ? (
+                  <img src={viewBook.coverUrl} alt={viewBook.title} className="w-full h-full object-cover" referrerPolicy="no-referrer"
+                    onError={e => { e.currentTarget.src = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=400'; }} />
+                ) : (
+                  <Book className="w-10 h-10 text-natural-muted opacity-30" />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-3">
+                <div>
+                  <h3 className="font-serif text-xl font-black text-zera-emerald leading-tight">{viewBook.title}</h3>
+                  {viewBook.author && <p className="text-xs font-bold text-natural-muted mt-0.5">{viewBook.author}</p>}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {viewBook.barcode && (
+                    <span className="text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-zera-emerald/10 text-zera-emerald border border-zera-emerald/20">
+                      {viewBook.barcode}
+                    </span>
+                  )}
+                  {viewBook.category && (
+                    <span className="text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-natural-bg text-natural-muted border border-natural-border">
+                      {viewBook.category}
+                    </span>
+                  )}
+                  {viewBook.lexileLevel && (
+                    <span className="text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-zera-yellow/25 text-zera-emerald-dark border border-zera-yellow/40">
+                      {viewBook.lexileLevel}
+                    </span>
+                  )}
+                </div>
+
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+                  {([
+                    ['ISBN', viewBook.isbn],
+                    ['Publisher', viewBook.publisher],
+                    ['Year', viewBook.publishedYear],
+                    ['Pages', viewBook.pageCount],
+                    ['Language', viewBook.language],
+                    ['Availability', typeof viewBook.availableCopies === 'number'
+                      ? `${viewBook.availableCopies} of ${viewBook.totalCopies || 1} in`
+                      : ''],
+                  ] as [string, unknown][]).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 0).map(([label, v]) => (
+                    <div key={label}>
+                      <dt className="font-black uppercase tracking-widest text-natural-muted text-[9px]">{label}</dt>
+                      <dd className="font-bold text-natural-text break-words">{String(v)}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                {viewBook.description && (
+                  <p className="text-xs leading-relaxed text-natural-text/90 border-t border-natural-border pt-3">
+                    {viewBook.description}
+                  </p>
+                )}
+
+                {!viewBook.id && (
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">
+                    This title is no longer in the catalogue — showing what the loan recorded.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white border border-natural-border rounded-[40px] p-8 shadow-sm flex flex-col gap-8 h-fit">
           <div className="flex items-center gap-4">
@@ -887,20 +996,25 @@ export const CirculationDashboard = () => {
                 {memberLoans.length > 0 ? (
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {memberLoans.map((loan, idx) => (
-                      <div
+                      <button
                         key={loan.id}
-                        className="flex items-center gap-3 bg-white border border-natural-border rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-1"
+                        type="button"
+                        onClick={() => openBookDetails(loan)}
+                        title="View this book's details"
+                        className="w-full text-left flex items-center gap-3 bg-white border border-natural-border rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-1 hover:border-zera-emerald/40 hover:shadow-md transition-all group cursor-pointer"
                       >
-                        <CheckCircle2 className="w-4 h-4 text-zera-emerald shrink-0" />
+                        {viewBookLoading === loan.id
+                          ? <Loader2 className="w-4 h-4 text-zera-emerald shrink-0 animate-spin" />
+                          : <CheckCircle2 className="w-4 h-4 text-zera-emerald shrink-0" />}
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-natural-text truncate">{loan.bookTitle}</p>
+                          <p className="text-sm font-bold text-natural-text truncate group-hover:text-zera-emerald underline decoration-transparent group-hover:decoration-zera-emerald/40 underline-offset-2 transition-colors">{loan.bookTitle}</p>
                           <p className="text-[9px] font-black uppercase text-natural-muted tracking-widest truncate">
                             {safeDate(loan.checkoutDate, 'd MMM yyyy') ? `Borrowed ${safeDate(loan.checkoutDate, 'd MMM yyyy')}` : 'Borrowed'}
                             {safeDate(loan.dueDate, 'd MMM') ? ` • Due ${safeDate(loan.dueDate, 'd MMM')}` : ''}
                           </p>
                         </div>
                         <span className="text-[9px] font-black uppercase tracking-widest text-natural-muted">#{memberLoans.length - idx}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ) : (
