@@ -432,6 +432,21 @@ function getStaffStatus(commencement: string, leave: string | null): 'active' | 
 }
 
 /**
+ * Pull a publication year out of whatever date string a catalogue returns.
+ *
+ * Open Library writes dates in several shapes — "2018-09-06", "September 6,
+ * 2018", "Sep 2018", "2018" — so a positional slice cannot work: slice(-4) on
+ * "2018-09-06" yields "9-06", which parsed as the year 9. Take the first
+ * plausible four-digit year instead, anywhere in the string. Digit
+ * boundaries, not word boundaries, so "c2004" (copyright 2004, common in
+ * library records) still yields 2004.
+ */
+const yearFromDateString = (raw: unknown): number | undefined => {
+  const m = String(raw ?? '').match(/(?<!\d)(1[5-9]\d{2}|20\d{2})(?!\d)/);
+  return m ? parseInt(m[1], 10) : undefined;
+};
+
+/**
  * Per-host circuit breaker for the outbound bibliographic sources, mirroring the
  * one in src/services/catalogService.ts.
  *
@@ -1242,9 +1257,11 @@ export async function createApiApp() {
                   if (info.publishers && info.publishers.length > 0) {
                     fetchedPublisher = info.publishers[0].name;
                   }
-                  if (info.publishDate) {
-                    const year = parseInt(info.publishDate.slice(-4));
-                    if (!isNaN(year)) fetchedYear = year;
+                  // publish_date, not publishDate — the camelCase key never
+                  // existed, so this source silently supplied no year.
+                  {
+                    const year = yearFromDateString(info.publish_date);
+                    if (year) fetchedYear = year;
                   }
                   if (info.authors) {
                     fetchedAuthors = info.authors.map((au: any) => au.name).join(', ');
@@ -1595,7 +1612,9 @@ export async function createApiApp() {
         author: resolvedAuthor,
         category,
         publisher,
-        publishedYear: retrieved.publishedYear || new Date().getFullYear() - 2,
+        // Only a year a source actually reported. This used to invent
+        // "two years ago" for any book whose year was unknown.
+        publishedYear: retrieved.publishedYear || undefined,
         subjects,
         pageCount,
         dimensions

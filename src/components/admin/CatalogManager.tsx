@@ -127,7 +127,10 @@ export const CatalogManager = () => {
     category: 'Fiction',
     description: '',
     publisher: '',
-    publishedYear: new Date().getFullYear(),
+    // Blank until a source supplies it. Defaulting to the current year meant
+    // every lookup's gap-filling saw a year already present and never wrote
+    // the real one, so books were catalogued as published this year.
+    publishedYear: undefined,
     language: 'English',
     pageCount: 0,
     dimensions: '',
@@ -422,7 +425,7 @@ export const CatalogManager = () => {
       lastAutoLookupRef.current = '';
       setNewBook({
         title: '', author: '', series: '', isbn: '', barcode: '', category: 'Fiction',
-        description: '', publisher: '', publishedYear: new Date().getFullYear(),
+        description: '', publisher: '', publishedYear: undefined,
         language: 'English', pageCount: 0, dimensions: '', lexileLevel: '',
         totalCopies: 1, availableCopies: 1, coverUrl: '', assignedTeacher: ''
       });
@@ -458,7 +461,7 @@ export const CatalogManager = () => {
       isbn: asIsbn ? isbn : '',
       barcode: isAccession ? term : '',
       category: 'Fiction', description: '', publisher: '',
-      publishedYear: new Date().getFullYear(), language: 'English',
+      publishedYear: undefined, language: 'English',
       pageCount: 0, dimensions: '', lexileLevel: '',
       totalCopies: 1, availableCopies: 1, coverUrl: '', assignedTeacher: ''
     });
@@ -476,7 +479,7 @@ export const CatalogManager = () => {
       category: book.category,
       description: book.description,
       publisher: book.publisher || '',
-      publishedYear: book.publishedYear || new Date().getFullYear(),
+      publishedYear: book.publishedYear || undefined,
       language: book.language || 'English',
       pageCount: book.pageCount || 0,
       dimensions: book.dimensions || '',
@@ -1173,7 +1176,7 @@ export const CatalogManager = () => {
                   type="number"
                   placeholder="YYYY"
                   className="w-full p-3 bg-natural-bg border border-natural-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zera-emerald text-natural-text"
-                  value={newBook.publishedYear} onChange={e => setNewBook({...newBook, publishedYear: parseInt(e.target.value) || 0})}
+                  value={newBook.publishedYear ?? ''} onChange={e => setNewBook({...newBook, publishedYear: parseInt(e.target.value) || undefined})}
                 />
               </div>
               <div className="space-y-2">

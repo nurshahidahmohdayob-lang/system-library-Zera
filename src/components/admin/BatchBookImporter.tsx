@@ -744,7 +744,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
         const descToUse = currentJob.row.description?.trim()
           || (isRealSynopsis(matchedBook?.description) ? matchedBook!.description! : '');
         const publisherToUse = matchedBook?.publisher || 'Zera Archives';
-        const yearToUse = matchedBook?.publishedYear || new Date().getFullYear();
+        const yearToUse = matchedBook?.publishedYear || undefined;
         const subjectsToUse = matchedBook?.subjects || [categoryToUse];
         const pageCountToUse = typeof matchedBook?.pageCount === 'number' ? matchedBook.pageCount : 0;
         const languageToUse = matchedBook?.language || 'English';
@@ -796,7 +796,9 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
           description: finalDesc,
           coverUrl: coverToUse,
           publisher: finalPublisher,
-          publishedYear: finalYear,
+          // Omitted when unknown — this payload is written raw, and Firestore
+          // rejects undefined; inventing the current year is what we removed.
+          ...(finalYear ? { publishedYear: finalYear } : {}),
           subjects: finalSubjects,
           pageCount: finalPageCount,
           // A measure supplied in the file wins: the librarian curated it for this

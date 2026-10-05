@@ -1,5 +1,20 @@
 import { Book } from '@/src/types';
 
+/**
+ * Pull a publication year out of whatever date string a catalogue returns.
+ *
+ * Open Library writes dates in several shapes — "2018-09-06", "September 6,
+ * 2018", "Sep 2018", "2018" — so a positional slice cannot work: slice(-4) on
+ * "2018-09-06" yields "9-06", which parsed as the year 9. Take the first
+ * plausible four-digit year instead, anywhere in the string. Digit
+ * boundaries, not word boundaries, so "c2004" (copyright 2004, common in
+ * library records) still yields 2004.
+ */
+export const yearFromDateString = (raw: unknown): number | undefined => {
+  const m = String(raw ?? '').match(/(?<!\d)(1[5-9]\d{2}|20\d{2})(?!\d)/);
+  return m ? parseInt(m[1], 10) : undefined;
+};
+
 // Simple in-memory cache to make repeated lookups instant
 const lookupCache = new Map<string, Partial<Book>>();
 
@@ -399,9 +414,9 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
   if (!enriched.publisher) {
     enriched.publisher = 'Zera Archives';
   }
-  if (!enriched.publishedYear) {
-    enriched.publishedYear = new Date().getFullYear();
-  }
+  // No year is left unset rather than stamped with the current one. A fake
+  // year is worse than none: it reads as fact on the record, and it blocks the
+  // gap-filling enrichment that would otherwise supply the real one.
   if (!enriched.subjects || enriched.subjects.length === 0) {
     enriched.subjects = [enriched.category];
   }
@@ -504,7 +519,9 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
         author: info.authors ? info.authors.map((a: any) => a.name).join(', ') : 'Unknown Author',
         coverUrl: info.cover ? info.cover.medium : '',
         publisher: info.publishers ? info.publishers.map((p: any) => p.name).join(', ') : 'Open Library Publisher',
-        publishedYear: info.publishDate ? parseInt(info.publishDate.slice(-4)) : undefined,
+        // The data API names this publish_date (snake_case); reading publishDate
+        // meant Open Library never contributed a year at all.
+        publishedYear: yearFromDateString(info.publish_date),
         pageCount: info.number_of_pages,
         subjects: info.subjects ? info.subjects.map((s: any) => s.name) : [],
         source: 'OpenLibrary'
