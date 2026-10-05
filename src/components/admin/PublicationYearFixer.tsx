@@ -45,7 +45,8 @@ export const PublicationYearFixer: React.FC<{ onClose: () => void }> = ({ onClos
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'ready' | 'applying' | 'done'>('idle');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [blankUnconfirmed, setBlankUnconfirmed] = useState(false);
+  // Unconfirmed years are blanked unless the librarian opts to keep them.
+  const [keepUnconfirmed, setKeepUnconfirmed] = useState(false);
   const [result, setResult] = useState<{ written: number; failed: number } | null>(null);
 
   const scan = async () => {
@@ -95,9 +96,12 @@ export const PublicationYearFixer: React.FC<{ onClose: () => void }> = ({ onClos
     if (p.found) return p.found === p.current ? 'keep' : 'update';
     if (p.current === null) return 'keep';
     if (p.invented) return 'blank';
-    // A year no source can confirm but that does not look invented — "1953" is
-    // not something the software ever made up. Kept unless asked otherwise.
-    return blankUnconfirmed ? 'blank' : 'keep';
+    // A year no source can confirm. These looked trustworthy — not "this year"
+    // — but checking them showed otherwise: some came from the AI enrichment
+    // (Macbeth 1508, A Tale of Two Cities 1800) and the rest are first-edition
+    // years of the *work* (Alice 1865 on a modern reprint's ISBN). Neither is
+    // this book's publication year, so they are blanked by default.
+    return keepUnconfirmed ? 'keep' : 'blank';
   };
 
   const counts = useMemo(() => {
@@ -107,7 +111,7 @@ export const PublicationYearFixer: React.FC<{ onClose: () => void }> = ({ onClos
       if (!p.found && !p.invented && p.current !== null) c.unconfirmed++;
     });
     return c;
-  }, [plans, blankUnconfirmed]);
+  }, [plans, keepUnconfirmed]);
 
   const changes = plans.filter(p => actionFor(p) !== 'keep')
     .sort((a, b) => a.title.localeCompare(b.title));
@@ -192,7 +196,7 @@ export const PublicationYearFixer: React.FC<{ onClose: () => void }> = ({ onClos
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {([
                   ['Correct year found', counts.update, 'text-zera-emerald'],
-                  ['Blanked — invented, no source', counts.blank, 'text-amber-600'],
+                  ['Blanked — no source confirms', counts.blank, 'text-amber-600'],
                   ['Already correct / kept', counts.keep, 'text-natural-muted'],
                 ] as const).map(([label, n, tone]) => (
                   <div key={label} className="rounded-2xl border border-natural-border p-4">
@@ -204,12 +208,12 @@ export const PublicationYearFixer: React.FC<{ onClose: () => void }> = ({ onClos
 
               {counts.unconfirmed > 0 && (
                 <label className="flex items-start gap-3 p-4 rounded-2xl bg-natural-bg border border-natural-border cursor-pointer">
-                  <input type="checkbox" checked={blankUnconfirmed} onChange={e => setBlankUnconfirmed(e.target.checked)}
+                  <input type="checkbox" checked={keepUnconfirmed} onChange={e => setKeepUnconfirmed(e.target.checked)}
                     className="mt-0.5 accent-zera-emerald w-4 h-4 shrink-0" />
                   <span className="text-xs text-natural-text leading-relaxed">
-                    <strong>Also blank {counts.unconfirmed} unconfirmed years.</strong> These don't look invented (e.g. 1953, 2006)
-                    and came from a source when the book was added, but no source can confirm them today — mostly because
-                    Google Books is unavailable. Leave unticked to keep them.
+                    <strong>Keep {counts.unconfirmed} unconfirmed years instead of blanking them.</strong> No source can
+                    confirm these. Many came from AI enrichment or are the year the <em>work</em> was first written rather
+                    than this edition (e.g. Macbeth recorded as 1508). Leave unticked to blank them.
                   </span>
                 </label>
               )}

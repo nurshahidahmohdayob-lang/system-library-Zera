@@ -1833,6 +1833,13 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
         parsed.description = "No synopsis/abstract available in public bibliographic databases.";
       }
 
+      // The model is asked for a publication year, and the synopsis above is
+      // carefully protected from invention — but the year was returned as-is.
+      // It produced Macbeth 1508, A Tale of Two Cities 1800, When the Wind Blows
+      // 1847, all saved to the catalogue by the batch importer. Only a year a
+      // real source reported is passed on; otherwise none.
+      parsed.publishedYear = retrievedData.publishedYear || undefined;
+
       res.json({ ...parsed, lexileLevel, webSourced });
     } catch (err: any) {
       console.log("[Scholastic API Core] Gemini API execution bypassed. Utilizing advanced offline scholastic heuristic modeling engine.");
