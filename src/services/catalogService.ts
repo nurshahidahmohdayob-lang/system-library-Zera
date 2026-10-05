@@ -356,7 +356,7 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
           if (!enriched.category || enriched.category === 'General') {
             enriched.category = info.categories ? info.categories[0] : 'General';
           }
-          if (!enriched.publisher) enriched.publisher = info.publisher || 'Zera Archives';
+          if (!enriched.publisher && info.publisher) enriched.publisher = info.publisher;
           if (!enriched.publishedYear) {
             enriched.publishedYear = info.publishedDate ? parseInt(info.publishedDate.split('-')[0]) : undefined;
           }
@@ -411,9 +411,8 @@ export async function enrichBookDetails(book: Partial<Book>): Promise<Partial<Bo
   if (!enriched.coverUrl) {
     enriched.coverUrl = 'https://images.unsplash.com/photo-1543004626-aa121041c291?q=80&w=600';
   }
-  if (!enriched.publisher) {
-    enriched.publisher = 'Zera Archives';
-  }
+  // No placeholder publisher ("Zera Archives"): it read as a real imprint and
+  // blocked the gap-filling that would otherwise supply the true one.
   // No year is left unset rather than stamped with the current one. A fake
   // year is worse than none: it reads as fact on the record, and it blocks the
   // gap-filling enrichment that would otherwise supply the real one.
@@ -518,7 +517,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<Partial<Book> | nu
         title: info.title,
         author: info.authors ? info.authors.map((a: any) => a.name).join(', ') : 'Unknown Author',
         coverUrl: info.cover ? info.cover.medium : '',
-        publisher: info.publishers ? info.publishers.map((p: any) => p.name).join(', ') : 'Open Library Publisher',
+        publisher: info.publishers ? info.publishers.map((p: any) => p.name).join(', ') : '',
         // The data API names this publish_date (snake_case); reading publishDate
         // meant Open Library never contributed a year at all.
         publishedYear: yearFromDateString(info.publish_date),
@@ -626,7 +625,7 @@ export async function lookupBookByTitle(title: string): Promise<Partial<Book>[] 
           description: cleanedDesc,
           category: info.categories ? info.categories[0] : 'General',
           coverUrl: info.imageLinks?.thumbnail ? info.imageLinks.thumbnail.replace('http:', 'https:') : '',
-          publisher: info.publisher || 'Zera Archives',
+          publisher: info.publisher || '',
           publishedYear: info.publishedDate ? parseInt(info.publishedDate.split('-')[0]) : undefined,
           subjects: info.categories || [],
           pageCount: info.pageCount || 0,
@@ -658,7 +657,7 @@ export async function lookupBookByTitle(title: string): Promise<Partial<Book>[] 
                 description: '',
                 category: doc.subject ? doc.subject[0] : 'General',
                 coverUrl: firstIsbn ? `https://covers.openlibrary.org/b/isbn/${firstIsbn}-L.jpg` : '',
-                publisher: doc.publisher ? doc.publisher[0] : 'Zera Archives',
+                publisher: doc.publisher ? doc.publisher[0] : '',
                 publishedYear: doc.first_publish_year || (doc.publish_year ? doc.publish_year[0] : undefined),
                 subjects: doc.subject ? doc.subject.slice(0, 5) : [],
                 pageCount: doc.number_of_pages_median || 0,

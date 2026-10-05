@@ -743,7 +743,7 @@ export const BatchBookImporter: React.FC<BatchBookImporterProps> = ({ onClose })
         // title/ISBN synopsis search below.
         const descToUse = currentJob.row.description?.trim()
           || (isRealSynopsis(matchedBook?.description) ? matchedBook!.description! : '');
-        const publisherToUse = matchedBook?.publisher || 'Zera Archives';
+        const publisherToUse = matchedBook?.publisher || '';
         const yearToUse = matchedBook?.publishedYear || undefined;
         const subjectsToUse = matchedBook?.subjects || [categoryToUse];
         const pageCountToUse = typeof matchedBook?.pageCount === 'number' ? matchedBook.pageCount : 0;

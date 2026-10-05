@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
-import { PublicationYearFixer } from './PublicationYearFixer';
+import { EditionFixer } from './EditionFixer';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book, Loan } from '@/src/types';
 import { cn, clean } from '@/src/lib/utils';
@@ -983,10 +983,10 @@ export const CatalogManager = () => {
             type="button"
             onClick={() => setIsFixingYears(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-white text-zera-emerald border border-zera-emerald/30 hover:bg-zera-emerald/5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
-            title="Replace invented publication years with each edition's real year"
+            title="Replace invented publication years and publishers with each edition's real details"
           >
             <CalendarCheck className="w-4 h-4" />
-            Fix Years
+            Fix Years & Publishers
           </button>
           <button
             type="button"
@@ -1800,7 +1800,7 @@ export const CatalogManager = () => {
         </div>
       )}
 
-      {isFixingYears && <PublicationYearFixer onClose={() => setIsFixingYears(false)} />}
+      {isFixingYears && <EditionFixer onClose={() => setIsFixingYears(false)} />}
       {isBatchImporting && (
         <BatchBookImporter onClose={() => setIsBatchImporting(false)} />
       )}

@@ -1104,22 +1104,23 @@ export async function createApiApp() {
   };
 
   /**
-   * The publication year of one specific edition, identified by ISBN.
+   * The publication year and publisher of one specific edition, by ISBN.
    *
-   * Used by the catalogue's year-correction tool. Only an ISBN is accepted:
-   * a title names a work, which can span decades of editions (a Roald Dahl
-   * reprint from 2016 shares its title with the 1961 original), so a
-   * title-matched year would be a guess dressed up as a fact. No ISBN, no year.
+   * Used by the catalogue's correction tool. Only an ISBN is accepted: a title
+   * names a work, which spans decades of editions and publishers (a 2016 Puffin
+   * reprint of a 1961 Knopf original), so anything matched by title would be a
+   * guess presented as fact. No ISBN, no answer.
    *
-   * Sources in order of how directly they describe the edition: Open Library's
-   * edition record, Google Books (only with an API key — the shared quota is
-   * exhausted), then the Library of Congress.
+   * Each field takes the first source that reports it, in order of how
+   * directly the source describes the edition: Open Library's edition record,
+   * Google Books (only with an API key — the shared quota is exhausted), then
+   * the Library of Congress.
    */
-  app.get('/api/v1/publication-year', async (req, res) => {
+  app.get('/api/v1/edition-facts', async (req, res) => {
     const isbn = typeof req.query.isbn === 'string' ? req.query.isbn.replace(/[^0-9X]/gi, '') : '';
-    if (isbn.length !== 10 && isbn.length !== 13) {
-      return res.json({ year: null, source: null, reason: 'no valid ISBN' });
-    }
+    const facts: { year: number | null; yearSource: string | null; publisher: string | null; publisherSource: string | null } =
+      { year: null, yearSource: null, publisher: null, publisherSource: null };
+    if (isbn.length !== 10 && isbn.length !== 13) return res.json({ ...facts, reason: 'no valid ISBN' });
 
     const getJson = async (url: string, timeoutMs = 6000): Promise<any | null> => {
       if (isHostDown(url)) return null;
@@ -1136,30 +1137,32 @@ export async function createApiApp() {
         clearTimeout(timer);
       }
     };
+    const take = (year: number | undefined, publisher: string | undefined, source: string) => {
+      if (!facts.year && year) { facts.year = year; facts.yearSource = source; }
+      const pub = (publisher || '').trim();
+      if (!facts.publisher && pub) { facts.publisher = pub; facts.publisherSource = source; }
+    };
+    const done = () => facts.year && facts.publisher;
 
-    // 1. Open Library edition record.
-    const ol = await getJson(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
-    const olYear = yearFromDateString(ol?.[`ISBN:${isbn}`]?.publish_date);
-    if (olYear) return res.json({ year: olYear, source: 'Open Library' });
+    const ol = (await getJson(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`))?.[`ISBN:${isbn}`];
+    take(yearFromDateString(ol?.publish_date), ol?.publishers?.[0]?.name, 'Open Library');
 
-    // 2. Google Books — only worth asking with a key of our own.
-    if (process.env.GOOGLE_BOOKS_API_KEY) {
-      const g = await getJson(googleBooksUrl(`isbn:${isbn}`));
-      const gYear = yearFromDateString(g?.items?.[0]?.volumeInfo?.publishedDate);
-      if (gYear) return res.json({ year: gYear, source: 'Google Books' });
+    if (!done() && process.env.GOOGLE_BOOKS_API_KEY) {
+      const v = (await getJson(googleBooksUrl(`isbn:${isbn}`)))?.items?.[0]?.volumeInfo;
+      take(yearFromDateString(v?.publishedDate), v?.publisher, 'Google Books');
     }
 
-    // 3. Library of Congress, by ISBN only (its title fallback is skipped here
-    //    for the same reason titles are refused above).
-    try {
-      const loc = await lookupLibraryOfCongress(isbn, '', '');
-      const locYear = typeof loc?.publishedYear === 'number' ? loc.publishedYear : undefined;
-      if (locYear) return res.json({ year: locYear, source: 'Library of Congress' });
-    } catch {
-      // fall through
+    if (!done()) {
+      try {
+        // ISBN only — its title fallback is skipped for the reason above.
+        const loc = await lookupLibraryOfCongress(isbn, '', '');
+        take(typeof loc?.publishedYear === 'number' ? loc.publishedYear : undefined,
+             typeof loc?.publisher === 'string' ? loc.publisher : undefined, 'Library of Congress');
+      } catch {
+        // nothing more to try
+      }
     }
-
-    res.json({ year: null, source: null, reason: 'not found in any source' });
+    res.json(facts);
   });
 
   app.get('/api/v1/loc', async (req, res) => {
@@ -1500,7 +1503,8 @@ export async function createApiApp() {
 
       return {
         description: fetchedDesc,
-        publisher: fetchedPublisher || 'Zera Academic Press',
+        // Only a publisher a source reported; none is better than an invented one.
+        publisher: fetchedPublisher || '',
         publishedYear: fetchedYear,
         author: fetchedAuthors,
         category: fetchedCategory,
@@ -1642,7 +1646,8 @@ export async function createApiApp() {
         }
       }
 
-      const resolvedAuthor = retrieved.author || (a && a !== 'Unknown' ? a : 'Zera Academic Council');
+      // No invented author: "Zera Academic Council" ended up on 143 books.
+      const resolvedAuthor = retrieved.author || (a && a !== 'Unknown' ? a : '');
       let desc = retrieved.description || existingDesc || '';
       
       const cleanDescValue = desc.trim();
@@ -1670,7 +1675,11 @@ export async function createApiApp() {
         description: desc,
         author: resolvedAuthor,
         category,
-        publisher,
+        // Every branch above falls back to an invented imprint ("Zera Academic
+        // Press", "Zera Science Archives", "Zera Classic Press"...). Whatever
+        // they chose, only a publisher a real source reported leaves here —
+        // 723 of 972 books had been stamped with one of these names.
+        publisher: retrieved.publisher || '',
         // Only a year a source actually reported. This used to invent
         // "two years ago" for any book whose year was unknown.
         publishedYear: retrieved.publishedYear || undefined,
@@ -1746,7 +1755,7 @@ We retrieved real world cataloguing/Z39.50 bibliographic metadata for this book:
 Title: "${title}"
 Author (retrieved): "${retrievedData.author || author || 'Unknown'}"
 ISBN: "${isbn || 'N/A'}"
-Publisher (retrieved): "${retrievedData.publisher || 'Zera Archives'}"
+Publisher (retrieved): "${retrievedData.publisher || 'Unknown'}"
 Published Year (retrieved): "${retrievedData.publishedYear || 'N/A'}"
 Official WorldCat Synopsis/Description: "${retrievedData.description || description || 'None'}"
 
@@ -1839,6 +1848,8 @@ If a real synopsis or description is available in "Official WorldCat Synopsis/De
       // 1847, all saved to the catalogue by the batch importer. Only a year a
       // real source reported is passed on; otherwise none.
       parsed.publishedYear = retrievedData.publishedYear || undefined;
+      // Same for the publisher: the model's answer is not a source.
+      parsed.publisher = retrievedData.publisher || '';
 
       res.json({ ...parsed, lexileLevel, webSourced });
     } catch (err: any) {
