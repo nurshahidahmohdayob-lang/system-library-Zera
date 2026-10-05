@@ -18,10 +18,12 @@ import {
   Copy,
   CheckCircle2,
   CalendarPlus,
-  User
+  User,
+  CalendarCheck
 } from 'lucide-react';
 import { db } from '@/src/lib/firebase';
 import { BatchBookImporter } from './BatchBookImporter';
+import { PublicationYearFixer } from './PublicationYearFixer';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, orderBy, limit, startAfter, getDoc, onSnapshot, where } from 'firebase/firestore';
 import { Book, Loan } from '@/src/types';
 import { cn, clean } from '@/src/lib/utils';
@@ -108,6 +110,7 @@ export const CatalogManager = () => {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const isbnInputRef = useRef<HTMLInputElement>(null);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
+  const [isFixingYears, setIsFixingYears] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -978,6 +981,15 @@ export const CatalogManager = () => {
           </button>
           <button
             type="button"
+            onClick={() => setIsFixingYears(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-white text-zera-emerald border border-zera-emerald/30 hover:bg-zera-emerald/5 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
+            title="Replace invented publication years with each edition's real year"
+          >
+            <CalendarCheck className="w-4 h-4" />
+            Fix Years
+          </button>
+          <button
+            type="button"
             onClick={() => setIsBatchImporting(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-zera-yellow text-zera-emerald-dark hover:brightness-95 rounded-full text-sm font-bold shadow-md transition-all uppercase tracking-wider"
           >
@@ -1788,6 +1800,7 @@ export const CatalogManager = () => {
         </div>
       )}
 
+      {isFixingYears && <PublicationYearFixer onClose={() => setIsFixingYears(false)} />}
       {isBatchImporting && (
         <BatchBookImporter onClose={() => setIsBatchImporting(false)} />
       )}

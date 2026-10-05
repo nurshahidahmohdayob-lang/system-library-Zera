@@ -1103,6 +1103,65 @@ export async function createApiApp() {
     return null;
   };
 
+  /**
+   * The publication year of one specific edition, identified by ISBN.
+   *
+   * Used by the catalogue's year-correction tool. Only an ISBN is accepted:
+   * a title names a work, which can span decades of editions (a Roald Dahl
+   * reprint from 2016 shares its title with the 1961 original), so a
+   * title-matched year would be a guess dressed up as a fact. No ISBN, no year.
+   *
+   * Sources in order of how directly they describe the edition: Open Library's
+   * edition record, Google Books (only with an API key — the shared quota is
+   * exhausted), then the Library of Congress.
+   */
+  app.get('/api/v1/publication-year', async (req, res) => {
+    const isbn = typeof req.query.isbn === 'string' ? req.query.isbn.replace(/[^0-9X]/gi, '') : '';
+    if (isbn.length !== 10 && isbn.length !== 13) {
+      return res.json({ year: null, source: null, reason: 'no valid ISBN' });
+    }
+
+    const getJson = async (url: string, timeoutMs = 6000): Promise<any | null> => {
+      if (isHostDown(url)) return null;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const r = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'ZeraLibrary/1.0 (library@zera.edu.my)' } });
+        if (r.status === 429 || r.status >= 500) noteHostFailure(url); else noteHostSuccess(url);
+        return r.ok ? await r.json() : null;
+      } catch {
+        noteHostFailure(url);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // 1. Open Library edition record.
+    const ol = await getJson(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
+    const olYear = yearFromDateString(ol?.[`ISBN:${isbn}`]?.publish_date);
+    if (olYear) return res.json({ year: olYear, source: 'Open Library' });
+
+    // 2. Google Books — only worth asking with a key of our own.
+    if (process.env.GOOGLE_BOOKS_API_KEY) {
+      const g = await getJson(googleBooksUrl(`isbn:${isbn}`));
+      const gYear = yearFromDateString(g?.items?.[0]?.volumeInfo?.publishedDate);
+      if (gYear) return res.json({ year: gYear, source: 'Google Books' });
+    }
+
+    // 3. Library of Congress, by ISBN only (its title fallback is skipped here
+    //    for the same reason titles are refused above).
+    try {
+      const loc = await lookupLibraryOfCongress(isbn, '', '');
+      const locYear = typeof loc?.publishedYear === 'number' ? loc.publishedYear : undefined;
+      if (locYear) return res.json({ year: locYear, source: 'Library of Congress' });
+    } catch {
+      // fall through
+    }
+
+    res.json({ year: null, source: null, reason: 'not found in any source' });
+  });
+
   app.get('/api/v1/loc', async (req, res) => {
     const { isbn, title, author } = req.query;
     if (!isbn && !title) {
