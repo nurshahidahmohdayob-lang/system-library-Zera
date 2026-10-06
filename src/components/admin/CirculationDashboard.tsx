@@ -21,6 +21,7 @@ import { format, addDays, addMonths } from 'date-fns';
 import { cn } from '@/src/lib/utils';
 import { BatchCirculationImporter } from './BatchCirculationImporter';
 import { ClassLending } from './ClassLending';
+import { returnLoan, LendingError } from '@/src/services/lendingService';
 // Loan limits/durations are shared with the Member Portal's policy section so the
 // rule the desk enforces and the rule members are shown can never drift apart.
 import { STUDENT_LOAN_LIMIT, STUDENT_LOAN_DAYS, STAFF_LOAN_MONTHS } from '@/src/lib/borrowingPolicy';
@@ -61,6 +62,10 @@ export const CirculationDashboard = () => {
   // catalogue record is fetched by its bookId on demand.
   const [viewBook, setViewBook] = useState<BookType | null>(null);
   const [viewBookLoading, setViewBookLoading] = useState<string | null>(null);
+  // Return-from-the-list: first tap arms, second confirms, so a stray tap on a
+  // phone cannot quietly check a book back in.
+  const [confirmReturnId, setConfirmReturnId] = useState<string | null>(null);
+  const [returningId, setReturningId] = useState<string | null>(null);
   // The books currently on loan to the selected member, read LIVE from
   // Firestore. Unlike an in-memory session list, this is never lost on reload
   // or when switching members — it always reflects the real borrowing records
@@ -263,6 +268,34 @@ export const CirculationDashboard = () => {
   const selectUser = (user: UserProfile) => {
     setSelectedUser(user);
     setSearchTerm(user.name);
+  };
+
+  /** Return one loan straight from the member's books-out list. */
+  const handleReturnLoan = async (loan: Loan) => {
+    if (confirmReturnId !== loan.id) {
+      setConfirmReturnId(loan.id);
+      setTimeout(() => setConfirmReturnId(c => (c === loan.id ? null : c)), 3000);
+      return;
+    }
+    setConfirmReturnId(null);
+    setReturningId(loan.id);
+    try {
+      const { bookTitle } = await returnLoan(loan.id);
+      setMemberLoans(prev => prev.filter(l => l.id !== loan.id));
+      setSessionReturns(prev => [
+        { bookTitle, userName: loan.userName || selectedUser?.name || 'Unknown member', barcode: '', at: new Date().toISOString() },
+        ...prev,
+      ]);
+      setStatus({ type: 'success', message: `“${bookTitle}” returned from ${selectedUser?.name || loan.userName}.` });
+    } catch (err) {
+      setStatus({
+        type: 'error',
+        message: err instanceof LendingError ? err.message : 'Could not return this book. Please check your connection.',
+      });
+      if (!(err instanceof LendingError)) console.error('Return failed:', err);
+    } finally {
+      setReturningId(null);
+    }
   };
 
   /** Open the catalogue record behind a loan the librarian tapped. */
@@ -996,12 +1029,15 @@ export const CirculationDashboard = () => {
                 {memberLoans.length > 0 ? (
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {memberLoans.map((loan, idx) => (
-                      <button
+                      <div
                         key={loan.id}
+                        className="flex items-center gap-2 bg-white border border-natural-border rounded-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-top-1 hover:border-zera-emerald/40 hover:shadow-md transition-all"
+                      >
+                      <button
                         type="button"
                         onClick={() => openBookDetails(loan)}
                         title="View this book's details"
-                        className="w-full text-left flex items-center gap-3 bg-white border border-natural-border rounded-2xl px-4 py-3 animate-in fade-in slide-in-from-top-1 hover:border-zera-emerald/40 hover:shadow-md transition-all group cursor-pointer"
+                        className="flex-1 min-w-0 text-left flex items-center gap-3 py-1 group cursor-pointer"
                       >
                         {viewBookLoading === loan.id
                           ? <Loader2 className="w-4 h-4 text-zera-emerald shrink-0 animate-spin" />
@@ -1015,6 +1051,24 @@ export const CirculationDashboard = () => {
                         </div>
                         <span className="text-[9px] font-black uppercase tracking-widest text-natural-muted">#{memberLoans.length - idx}</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReturnLoan(loan)}
+                        disabled={returningId === loan.id}
+                        title={confirmReturnId === loan.id ? 'Tap again to confirm the return' : 'Return this book'}
+                        className={cn(
+                          'shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all disabled:opacity-50',
+                          confirmReturnId === loan.id
+                            ? 'bg-zera-yellow text-zera-emerald-dark border-zera-yellow-dark'
+                            : 'bg-white text-zera-emerald border-zera-emerald/30 hover:bg-zera-emerald hover:text-white'
+                        )}
+                      >
+                        {returningId === loan.id
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <ArrowDownLeft className="w-3.5 h-3.5" />}
+                        {confirmReturnId === loan.id ? 'Confirm?' : 'Return'}
+                      </button>
+                      </div>
                     ))}
                   </div>
                 ) : (

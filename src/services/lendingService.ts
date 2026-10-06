@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, runTransaction } from 'firebase/firestore';
 import { addDays, addMonths } from 'date-fns';
 import { db } from '@/src/lib/firebase';
 import { Book, UserProfile, Loan } from '@/src/types';
@@ -128,3 +128,39 @@ export const issueBook = async (
   };
   return { loan, bookId, book };
 };
+
+/**
+ * Return one specific loan.
+ *
+ * The returns station works from a scanned code and has to infer which loan it
+ * belongs to — for a title with several copies out, it takes the oldest, which
+ * may be someone else's. When the librarian is looking at a member and presses
+ * Return beside one of their books, there is nothing to infer: this is the loan.
+ *
+ * Done in a transaction so a double tap cannot return it twice — the second
+ * attempt sees the loan already returned and stops, rather than adding a
+ * phantom copy back to the shelf.
+ */
+export const returnLoan = async (loanId: string): Promise<{ bookTitle: string }> =>
+  runTransaction(db, async tx => {
+    const loanRef = doc(db, 'loans', loanId);
+    const loanSnap = await tx.get(loanRef);
+    if (!loanSnap.exists()) throw new LendingError('This loan no longer exists.');
+    const loan = loanSnap.data() as Loan;
+    if (loan.status !== 'active') throw new LendingError(`“${loan.bookTitle}” has already been returned.`);
+
+    // Reads must precede writes in a Firestore transaction.
+    const bookRef = loan.bookId ? doc(db, 'books', loan.bookId) : null;
+    const bookSnap = bookRef ? await tx.get(bookRef) : null;
+
+    tx.update(loanRef, { status: 'returned', returnDate: new Date().toISOString() });
+    if (bookRef && bookSnap?.exists()) {
+      const b = bookSnap.data() as Book;
+      // Never above the number of copies the library owns.
+      const total = b.totalCopies || 1;
+      tx.update(bookRef, { availableCopies: Math.min(total, (b.availableCopies || 0) + 1) });
+    }
+    // A book deleted from the catalogue keeps its loans; the loan still closes.
+    return { bookTitle: loan.bookTitle };
+  });
+
